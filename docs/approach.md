@@ -159,6 +159,81 @@ to the class start, not a server lock. We deliberately did **not** force-click i
 is a 96-hour instance on a real enrolment with one required activity. That is the user's
 call, not the agent's.
 
+### 2.7 Driving the VM as a simulated user (run 002)
+
+Everything below was found by actually walking "Required Lab Setup" inside the jumpbox.
+Each item is a bug we hit, and the fix that is now in the code — these are the things that
+will silently produce wrong results if a future run forgets them.
+
+**Coordinate integrity — the canvas lies about its size.**
+The console canvas starts at 1024×768 and is **renegotiated to 2000×1472 once the VM
+connects**. Any code that caches the initial value mis-aims every click, and the error
+grows with distance from the origin, so it looks like flaky UI rather than a bug. Worse,
+screenshotting the *iframe* yields a 2000×**1496** PNG because it includes a 24 px console
+toolbar, so image coordinates are offset from VM coordinates by exactly that strip.
+→ `screen()` screenshots the `<canvas>` element itself, and `click()` reads
+`resolution()` live on every call. Image pixels now map 1:1 onto VM pixels, which is what
+makes "read a coordinate off a screenshot and click it" safe.
+
+**`sendTextToEnvironment` resolves before the VM has consumed the text.**
+It replays keystrokes into the remote session asynchronously. With a fixed 500 ms settle,
+pressing Enter afterwards submitted only the first few characters — `https://portal.azure.com`
+became a Bing search for `https:`. The failure is silent and looks like a typo.
+→ the settle now scales with length (`1200 ms + 60 ms/char`). **Never press Enter in the
+same breath as typing without a length-aware wait.**
+
+**Prefer Skillable's own "type this" affordance over our injection.**
+Credential values on the Resources tab are `span.typeText` elements; clicking one makes the
+lab client type it into the VM. Using that (`type_credential_natively()`) takes our code
+out of the trust path — when a login fails you can state with certainty that the string was
+byte-for-byte what a human would have got, instead of suspecting your own automation. We
+used exactly this to clear ourselves during the sign-in failure below.
+
+**A modal dialog on the top frame freezes the whole client.**
+`#modalDialog` lives on the *top* frame and swallows pointer events for every frame beneath
+it. An unhandled one makes the next unrelated click fail with
+`<div class="dialog-header"> … intercepts pointer events` — an error that names the wrong
+element and points at the wrong problem entirely.
+→ `dismiss_dialog()` runs at the head of every tab switch. It returns the dialog text,
+which is worth reading rather than blindly dismissing (see next item).
+
+**Read the dialog before refreshing credentials.**
+`Refresh Credentials` is not free. Its confirmation says *"The current credentials are valid
+for another 7 Hr 39 Min. Are you sure you want to refresh?"* — i.e. the dialog hands you the
+remaining validity, which is the single most useful fact for deciding whether a sign-in
+failure is a credential problem at all. It was not; refreshing would have burned a valid
+set and destroyed the evidence.
+
+**Entra replication lag looks exactly like a broken lab — this is the precision problem.**
+A freshly provisioned Cloud Slice user returned *"We couldn't find an account with that
+username"* twice, several minutes apart, and then signed in normally on the third attempt
+with an identical string. A naive validator reports "🔴 credentials in the Resources tab are
+invalid" and is wrong.
+→ **Environment warm-up must be retried with backoff and never reported as a content
+defect.** Distinguishing *the lab is wrong* from *the cloud is still catching up* is the
+core accuracy problem of this product, not an edge case. Rule of thumb: a defect claim
+needs either an oracle (the model-lifecycle API) or a stable, repeated observation — never
+a single transient failure.
+
+**Debugging a secret without looking at it.**
+To rule out mangled injection we printed a *shape* of each credential — digits → `#`,
+letters → `a`/`A`, punctuation kept — plus its length and any non-ASCII codepoints. That
+was enough to prove the username was clean (`Aaaa#-########@AAAAAAAAAAA.aaaaaaaaaaa.aaa`,
+42 chars, no stray whitespace) without exposing it. Worth keeping as a standard technique.
+
+**Secret hygiene has an automation-shaped hole.**
+Bulk DOM enumeration is the most useful recon tool we have and it will happily dump
+credential values straight into the transcript — ours did. `artifacts/` is gitignored and
+these values are ephemeral, but the habit is the risk.
+→ redact at the *enumerator*, not at the call site, and move secrets with
+`--type-cred "Scope/Label"`, which carries a value from the Resources tab into the VM
+without it ever reaching stdout, a log, or a shell argument.
+
+**CLI ergonomics: independent flags cannot express order.**
+`--click A --type X --click B` silently kept only the last `--click` (argparse) and then ran
+the fixed sequence click→type, so a click meant to land *before* typing happened *after*.
+The step loop needs an explicit ordered action list, not a bag of flags.
+
 ---
 
 ## 3. Recommended architecture
@@ -252,6 +327,24 @@ moved navigation, removed feature, broken link, timing/quota). Emit **SARIF 2.1.
 The instruction file and line become the SARIF `location` — which is what makes this
 actionable for whoever maintains the lab content.
 
+Run 002 surfaced a category the original taxonomy missed, so add:
+
+- **`LAB008` — undocumented mandatory step.** The instructions are not *wrong*; they are
+  *incomplete*, and the gap blocks progress. The Azure sign-in demanding a **Temporary
+  Access Pass** is the canonical example: line 61 says only "sign in with your Azure
+  credentials", the Resources tab supplies both a Password and a TAP, and nothing says which
+  to use or when. Every learner hits this in the first two minutes.
+- **`LAB000` — environment transient, explicitly not a defect.** A reserved non-finding code
+  so that retried-and-recovered failures are still *recorded in the trace* without being
+  reported. Silently dropping them loses the evidence that the run was noisy; promoting them
+  to findings destroys precision. This code is how the differ stays honest about the
+  difference.
+
+The taxonomy also needs to record **passes**, not just failures. Run 002 confirmed Task 2
+("search Microsoft Foundry") and Task 3 ("Overview → Create a resource") match reality
+exactly. A differ with no negative evidence cannot tell "verified correct" from "never
+reached", and those two must never collapse into one another.
+
 ---
 
 ## 4. How to reuse what we already have
@@ -264,6 +357,8 @@ This is the part worth being deliberate about. We have four categories of asset.
 |---|---|
 | `src/lab_validator/browser.py` | **The session substrate.** Profile discovery, allow-list cloning, CDP launch/attach. The hardest-won code in the repo, and lab-agnostic — it will not change as the validator grows. |
 | `scripts/browser_session.py` | **The recon and bootstrap CLI.** `--list-profiles`, `--launch`, `--signin`, `--status`, `--goto`, `--click`, `--shot`, `--probe`. |
+| `src/lab_validator/labclient.py` | **The lab driver.** Frame resolution, `window.api.v1` calls, instruction paging, Resources-tab credentials, dialog handling, and coordinate-correct screen capture / click / type. This is the piece that turns "a lab is open" into "a lab can be walked". |
+| `scripts/lab_drive.py` | **The step loop.** `--state`, `--creds`, `--page N`, `--screen`, `--click`, `--type`, `--type-cred`, `--key`, `--wait`. |
 | `src/lab_validator/secrets_store.py` | Keep for the **CI fallback path** (headless storageState + DPAPI). Not needed for the attach path, but verified and cheap to retain. |
 | `src/lab_validator/config.py` | Extend into the target model (see 4.3). |
 | `.gitignore` / `.pre-commit-config.yaml` | The safety net. Already verified to block `.auth/`, `.env`, `*.har`, `trace.zip`, `.browser-profile/`. **Do not weaken these** — evidence artifacts are exactly the kind of thing that leaks tokens. |
@@ -283,6 +378,22 @@ place and should become a real command:
 
 Codifying these is not tidiness. Recon *is* the inner loop of this project — every new lab
 starts with the same "what is on this page and what can I reach" question.
+
+### 4.2b The step loop needs ordered actions, not flags
+
+`lab_drive.py` currently applies its flags in a fixed order (click → type → key → wait →
+screen) and argparse keeps only the last occurrence of each. That cannot express
+"click, type, click again", and it fails *silently* in the wrong order rather than erroring.
+
+Replace the flag bag with an explicit sequence — the natural unit is one instruction step:
+
+```
+python scripts/lab_drive.py --do "click 1000,733" "cred Azure Portal/TAP" \
+                            "click 1121,858" "wait 15000" "shot tap-signin"
+```
+
+Each verb then becomes a run-trace entry for free, which is the point: the executor and the
+capture format should be the same list, not two parallel ones that drift.
 
 ### 4.3 Discovered IDs → declarative targets, never hardcoded
 
