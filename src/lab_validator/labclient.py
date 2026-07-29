@@ -206,6 +206,14 @@ class LabClient:
         await self.console.locator("canvas").first.screenshot(path=str(out))
         return out
 
+    async def screen_bytes(self) -> bytes:
+        """Capture the VM framebuffer to memory.
+
+        Used by stability probes, which compare consecutive frames and would
+        otherwise litter the run folder with thousands of throwaway PNGs.
+        """
+        return await self.console.locator("canvas").first.screenshot()
+
     async def resolution(self) -> tuple[int, int]:
         size = await self.console.evaluate(
             "() => { const c = document.querySelector('canvas');"
@@ -239,6 +247,19 @@ class LabClient:
         px, py = box["x"] + x * sx, box["y"] + y * sy
         await self.page.mouse.click(px, py, click_count=2 if double else 1)
         await self.page.wait_for_timeout(500)
+
+    async def move(self, x: int, y: int) -> None:
+        """Move the pointer to VM-screen coordinates without clicking.
+
+        Hover reveals menus and tooltips that a click would dismiss, so this is
+        how you check a label without changing state.
+        """
+        box = await self._canvas_box()
+        res_w, res_h = await self.resolution()
+        await self.page.mouse.move(
+            box["x"] + x * box["width"] / res_w, box["y"] + y * box["height"] / res_h
+        )
+        await self.page.wait_for_timeout(300)
 
     async def focus_vm(self) -> None:
         box = await self._canvas_box()
