@@ -71,9 +71,14 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     add("")
     add("| Section | Module | Status | Steps | Findings |")
     add("|---|---|---|---|---|")
+    retracted = run.retracted()
     for seg in segments:
         rows = by_segment.get(seg["id"], [])
-        finds = sum(1 for r in rows if r.get("verdict") in FINDING_VERDICTS)
+        finds = sum(
+            1
+            for r in rows
+            if r.get("verdict") in FINDING_VERDICTS and r.get("seq") not in retracted
+        )
         status = seg.get("status") or "pending"
         mark = {"done": "done", "blocked": "**blocked**", "skipped": "skipped",
                 "in_progress": "*part*"}.get(status, "*not reached*")
@@ -87,7 +92,7 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         add("")
 
     # ---- findings -------------------------------------------------------
-    findings = [s for s in steps if s.get("verdict") in FINDING_VERDICTS]
+    findings = run.findings()
     findings.sort(key=lambda s: (SEVERITY_ORDER.get(s.get("severity", "minor"), 9), s["seq"]))
     add("## Findings")
     add("")
@@ -173,6 +178,23 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         add("")
         for s in transients:
             add(f"- {s.get('note') or s.get('action')}")
+        add("")
+
+    # ---- retractions ----------------------------------------------------
+    withdrawals = [s for s in steps if s.get("kind") == "retraction"]
+    if withdrawals:
+        add("## Withdrawn findings")
+        add("")
+        add("Recorded during the walk, then withdrawn once the cause was understood. "
+            "They are listed rather than deleted so the report can be audited against "
+            "the raw trace.")
+        add("")
+        for s in withdrawals:
+            original = next(
+                (x for x in steps if x.get("seq") == s.get("retracts")), {}
+            )
+            add(f"- `{original.get('verdict', '?')}` on `{original.get('action', '?')}` "
+                f"— {s.get('note', 'no reason recorded')}")
         add("")
 
     events = manifest.get("events") or []
