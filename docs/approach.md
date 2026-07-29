@@ -99,20 +99,58 @@ Two findings here are architecturally significant:
 unfiltered. Lab discovery must go through `/User/CurrentTraining/{userId}`. A validator that
 crawled the catalog would have concluded there were zero labs.
 
-**(b) The lab is Hyper-V *and* Azure — the "Cloud Slice vs Virtualization" fork is both.**
-The research treated these as either/or. This lab is a hybrid, which leaves two sub-cases we
-cannot yet distinguish:
+**(b) The lab is Hyper-V *and* Azure — resolved on 2026-07-29 as *jumpbox*.**
 
-- **Jumpbox** — the Hyper-V VM is a client desktop and *all* Azure work happens in a browser
-  inside it. Then everything is behind an HTML5 pixel canvas and **vision is mandatory for
-  the entire run**.
-- **Side-by-side** — a Cloud Slice subscription is reachable from the *host* browser in its
-  own window with a full DOM, and the VM is only used for local tooling. Then the
-  high-value model-retirement checks run over the DOM and only VM-local steps need vision.
+The research treated Cloud Slice and Virtualization as either/or. This lab listed both, so
+we launched it to find out. Answer: **jumpbox**.
 
-**Resolving this is the highest-value single observation remaining.** It sets the
-reliability ceiling and the cost per run. One `--probe --all-tabs` against a launched
-instance answers it.
+- `getEnvironmentConnectionStatus()` returns
+  `{environment_type: "machine", machine_id: 344479, status: "connected"}`.
+- Instruction line 996 references `C:/Users/Admin/Desktop/LABS/Lab 05 - Fine-Tuning`, and
+  line 987 says "Go to https://portal.azure.com" — i.e. the Azure portal is opened from a
+  browser *inside* the VM.
+
+So the Azure work is **behind the pixel canvas**, and any agent that actually *performs*
+lab steps needs vision for essentially the whole run.
+
+**This is much less bad than it sounds**, and the reason is §3.3: the highest-value defect
+class — wrong, retired or non-existent models — is caught by **static analysis of the
+instruction text plus authoritative API cross-checking, with zero vision and zero VM
+interaction**. Run 001 found two invalid model identifiers and a broken table of contents
+without a single click inside the VM. Vision is needed to *reproduce* a defect, not to
+*find* the most common ones.
+
+### 2.6 The lab client structure (confirmed live)
+
+Launching produces `mslearningcampus.com/Lab/Launch/{labId}` → redirect →
+`labclient.labondemand.com/Setup/{instanceGuid}` (provisioning, ~2 min) →
+`labclient.labondemand.com/LabClient/{instanceGuid}`.
+
+That final page is a frameset:
+
+| Frame | URL | Contents |
+|---|---|---|
+| *(top)* | `/LabClient/{guid}` | shell only — **no `window.api`** |
+| `#consoleIFrame` | `/VirtualizationClient/{guid}?childClient=1` | 1024×768 `<canvas>` + 1 `<video>` — the Hyper-V console |
+| `#instructionsIFrame` | `/Instructions/{guid}` | the instructions, **full DOM** |
+| `#contentDialogIFrame` | `about:blank` | dialog host; reaches the API via `window.parent` |
+
+Two consequences that matter:
+
+1. **`window.api.v1` lives in the child frames, not the top frame.** Probing only the top
+   page reports `window.api present: False` and would wrongly conclude the Lab Client API
+   is unavailable. All 22 documented methods are present in both child frames.
+2. **`/Instructions/{guid}` is directly addressable with a full DOM.** Instruction text can
+   therefore be extracted **without a Skillable API key** — which removes what looked like
+   the project's biggest external dependency.
+
+Useful confirmed calls: `gotoInstructionsPage(i)` (index **clamps to 0** past the end — a
+reliable termination signal), `getInstructionsPageIndex()`, `getMinutesRemaining()`
+(returned 5760 = 96 h exactly), `getEnvironmentConnectionStatus()`.
+
+Caveat found the hard way: the instructions frame **accumulates** rendered pages. Page 4
+came back at 78 KB containing Labs 03–10. Extraction still captures everything, but
+per-section attribution must come from the heading structure, not the page index.
 
 ### 2.5 Launch gating
 
@@ -345,13 +383,25 @@ Ordered by *unblocked now* first, because the lab launch is gated.
 
 ## 6. Open questions
 
-- Jumpbox or side-by-side? (§2.4b) — gated on first launch.
-- Is `window.api.v1` exposed in this tenant's lab client? — gated on first launch.
-- Does anyone hold a Skillable API key or own these Lab Profiles? — **user input needed.**
-- Can instruction text be obtained pre-launch by any route? No TMS route was found; the
-  documented one needs an `api_key`.
-- Is a 96-hour instance re-launchable, or is the single required activity one-shot? This
-  determines how freely we can iterate on launch day.
+**Resolved by validation run 001 (2026-07-29):**
+
+- ~~Jumpbox or side-by-side?~~ → **Jumpbox** (§2.4b).
+- ~~Is `window.api.v1` exposed?~~ → **Yes**, in the child frames, all 22 methods (§2.6).
+- ~~Can instruction text be obtained without an API key?~~ → **Yes**, `/Instructions/{guid}`
+  is directly readable (§2.6). This substantially reduces the value of chasing an API key.
+
+**Still open:**
+
+- Does anyone hold a Skillable API key or own these Lab Profiles? Still useful for
+  *launching* labs cheaply (free integration tier: 5 concurrent, 30-min cap, non-billable),
+  even though it is no longer needed to read instructions.
+- Is a 96-hour instance re-launchable, or is the single required activity one-shot? Governs
+  how freely we can iterate.
+- **Is there an authoritative machine-readable lifecycle feed for Azure OpenAI *API
+  versions*?** Run 001 could not check `2024-05-01-preview` / `2024-12-01-preview` for this
+  reason. Currently the largest oracle gap.
+- What is the VM's `Admin` password, and is it exposed via `getLabVariable()` or only in the
+  "Access and Credentials" instruction section? Needed before any in-VM step can run.
 
 ---
 
