@@ -35,6 +35,12 @@ from lab_validator.browser import (  # noqa: E402
     BrowserError,
     attached_context,
 )
+from lab_validator.imaging import (  # noqa: E402
+    QUIET_THRESHOLD,
+    save_evidence,
+    save_view,
+    stability,
+)
 from lab_validator.labclient import LabClient  # noqa: E402
 from lab_validator.runlog import Run  # noqa: E402
 
@@ -67,6 +73,19 @@ class Stop(Exception):
     """Raised to abandon the remaining actions in a step."""
 
 
+async def capture(lab: LabClient, run: Run, segment: str, label: str) -> Path:
+    """Capture the VM screen as evidence, plus a reader-sized copy.
+
+    Evidence frames must stay legible enough to read a portal label or a
+    traceback; the agent's reader has a much smaller size limit than that
+    requires. Writing both keeps each fit for purpose.
+    """
+    png = await lab.screen_bytes()
+    out = save_evidence(png, run.next_image(segment, label))
+    save_view(png, out)
+    return out
+
+
 async def probe_quiet(lab: LabClient, run: Run, segment: str, arg: str, budget: float) -> bool:
     """Wait until the VM screen stops changing.
 
@@ -78,6 +97,7 @@ async def probe_quiet(lab: LabClient, run: Run, segment: str, arg: str, budget: 
     started = time.monotonic()
     last, last_change = None, time.monotonic()
     beat = 0.0
+    worst = 0.0
     while time.monotonic() - started < budget:
         try:
             frame = await lab.screen_bytes()
@@ -86,10 +106,13 @@ async def probe_quiet(lab: LabClient, run: Run, segment: str, arg: str, budget: 
             frame = None
         now = time.monotonic()
         if frame is not None:
-            if frame != last:
-                last, last_change = frame, now
-            elif (now - last_change) * 1000 >= settle_ms:
-                return True
+            delta = stability(last, frame) if last is not None else 255.0
+            if delta > QUIET_THRESHOLD:
+                last, last_change, worst = frame, now, 0.0
+            else:
+                worst = max(worst, delta)
+                if (now - last_change) * 1000 >= settle_ms:
+                    return True
         if now - beat >= 15:
             beat = now
             run.heartbeat(
@@ -97,6 +120,7 @@ async def probe_quiet(lab: LabClient, run: Run, segment: str, arg: str, budget: 
                 operation=f"quiet:{settle_ms}",
                 elapsed_s=now - started,
                 probe="screen-stable",
+                detail={"stillSince_s": round(now - last_change, 1), "delta": round(worst, 3)},
             )
         await asyncio.sleep(2)
     return False
@@ -188,8 +212,7 @@ async def run_actions(
                     note=f"settled after {elapsed:.0f}s",
                 )
             else:
-                shot = run.next_image(segment, f"{label}-timeout")
-                await lab.screen(shot)
+                shot = await capture(lab, run, segment, f"{label}-timeout")
                 findings += 1
                 run.step(
                     segment,
@@ -218,8 +241,7 @@ async def run_actions(
             run.step(segment, action=f"page:{arg}", surface="dom")
 
         elif verb == "shot":
-            shot = run.next_image(segment, arg or label)
-            await lab.screen(shot)
+            shot = await capture(lab, run, segment, arg or label)
             run.step(segment, action="shot", surface="vm", images=[shot])
             print(f"  -> {shot.relative_to(run.dir)}")
 

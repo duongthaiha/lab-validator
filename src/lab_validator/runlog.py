@@ -323,6 +323,7 @@ class Run:
         operation: str,
         elapsed_s: float,
         probe: str | None = None,
+        detail: dict | None = None,
         images: list[Path | str] | None = None,
     ) -> dict:
         """Record liveness during a long-running operation.
@@ -330,6 +331,11 @@ class Run:
         Heartbeats keep a long wait visible in the trace and make a crash
         mid-wait resumable rather than opaque. They are tagged so reports can
         exclude them from step counts.
+
+        `detail` carries whatever the probe is measuring. Without it a probe
+        that waits out its whole budget leaves no evidence of *why*, and the
+        only way to tell a stuck lab from a broken probe is to run it again
+        and watch.
         """
         return self.step(
             segment,
@@ -340,7 +346,42 @@ class Run:
             kind="heartbeat",
             elapsedS=round(elapsed_s, 1),
             **({"probe": probe} if probe else {}),
+            **({"detail": detail} if detail else {}),
         )
+
+    def retract(self, seq: int, reason: str) -> dict:
+        """Withdraw an earlier finding, keeping both records.
+
+        Findings get recorded before their cause is always understood, and
+        some later turn out to be the harness misreading the lab. Deleting the
+        record would be the tidy option and the wrong one: the trace is
+        evidence, and a report that quietly loses entries cannot be audited.
+        Appending a retraction keeps the original visible while removing it
+        from the findings list, with the reason attached.
+        """
+        target = next((s for s in self.steps() if s.get("seq") == seq), None)
+        if target is None:
+            raise ValueError(f"No step with seq {seq} to retract")
+        if target.get("verdict") not in FINDING_VERDICTS:
+            raise ValueError(
+                f"seq {seq} has verdict {target.get('verdict')!r}, which is not a finding"
+            )
+        return self.step(
+            target.get("segment", ""),
+            verdict="PASS",
+            action=f"retract:{seq}",
+            surface="report",
+            note=reason,
+            kind="retraction",
+            retracts=seq,
+        )
+
+    def retracted(self) -> set[int]:
+        return {
+            int(s["retracts"])
+            for s in self.steps()
+            if s.get("kind") == "retraction" and s.get("retracts") is not None
+        }
 
     def event(self, kind: str, detail: str, **extra: Any) -> None:
         """Record a run-level event in the manifest (credential refresh, resume)."""
@@ -421,7 +462,13 @@ class Run:
                     yield json.loads(line)
 
     def findings(self) -> list[dict]:
-        return [s for s in self.steps() if s.get("verdict") in FINDING_VERDICTS]
+        """Findings that still stand - retracted ones stay in the trace only."""
+        gone = self.retracted()
+        return [
+            s
+            for s in self.steps()
+            if s.get("verdict") in FINDING_VERDICTS and s.get("seq") not in gone
+        ]
 
     def summary(self) -> dict:
         """Verdict counts, excluding heartbeats, plus segment coverage."""

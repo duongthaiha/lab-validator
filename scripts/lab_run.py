@@ -138,6 +138,15 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_retract(args) -> int:
+    run = latest(args)
+    if not args.note:
+        raise BrowserError("--retract requires --note explaining why it was withdrawn")
+    rec = run.retract(args.retract, args.note)
+    print(f"retracted seq {args.retract} (retraction is seq {rec['seq']})")
+    return 0
+
+
 def cmd_finish(args) -> int:
     run = latest(args)
     run.finish(args.finish)
@@ -151,6 +160,8 @@ def main() -> int:
     p.add_argument("--next", action="store_true", help="next section to walk")
     p.add_argument("--report", action="store_true", help="write gap-analysis.md")
     p.add_argument("--finish", metavar="STATUS", help="seal the run and report")
+    p.add_argument("--retract", type=int, metavar="SEQ", help="withdraw a finding by seq")
+    p.add_argument("--note", help="reason, required with --retract")
     p.add_argument("--target", default="azure-ai-platform", help="target descriptor slug")
     p.add_argument("--agent", default="copilot-cli", help="who is driving")
     p.add_argument("--run", help="run folder (default: most recent)")
@@ -160,6 +171,8 @@ def main() -> int:
     try:
         if args.start:
             return asyncio.run(cmd_start(args))
+        if args.retract is not None:
+            return cmd_retract(args)
         if args.finish:
             return cmd_finish(args)
         if args.report:

@@ -281,7 +281,39 @@ class LabClient:
         )
         await self.page.wait_for_timeout(1200 + 60 * len(text))
 
+    #: Playwright spells modifiers out; the shorthand a human reaches for on a
+    #: keyboard is what ends up in a --do list, so accept both.
+    _KEY_ALIASES = {
+        "ctrl": "Control",
+        "cmd": "Meta",
+        "win": "Meta",
+        "esc": "Escape",
+        "del": "Delete",
+        "ins": "Insert",
+        "pgup": "PageUp",
+        "pgdn": "PageDown",
+        "return": "Enter",
+        "space": " ",
+    }
+
+    @classmethod
+    def normalise_key(cls, key: str) -> str:
+        """Map a key or chord to Playwright's spelling.
+
+        An unrecognised modifier raises deep inside Playwright mid-step, which
+        aborts a walk after some actions have already been applied. Normalising
+        up front keeps that class of typo from reaching the VM at all.
+        """
+        parts = [p.strip() for p in key.split("+") if p.strip()]
+        if not parts:
+            raise BrowserError(f"Empty key: {key!r}")
+        out = []
+        for part in parts:
+            mapped = cls._KEY_ALIASES.get(part.lower(), part)
+            out.append(mapped if len(mapped) > 1 else mapped)
+        return "+".join(out)
+
     async def key(self, *keys: str, delay: int = 400) -> None:
         for k in keys:
-            await self.page.keyboard.press(k)
+            await self.page.keyboard.press(self.normalise_key(k))
             await self.page.wait_for_timeout(delay)
