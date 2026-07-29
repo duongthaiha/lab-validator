@@ -1,12 +1,13 @@
 # Lab Validator — approach and reuse guide
 
-**Status:** design settled, harness proven, target lab identified, first launch pending.
+**Status:** design settled, harness proven, lab launched and partially walked as a learner.
+**Coverage so far:** 1 of 12 modules end-to-end (~3 % of instruction lines executed);
+100 % statically analysed. Findings: [`gapanalysis.md`](gapanalysis.md).
 **Last updated:** 2026-07-29
 
 ---
 
 ## 1. What we are building
-
 An agent that drives a browser through a Microsoft Learning Campus hands-on lab the way a
 real learner would, and emits a list of places where the **lab instructions no longer match
 reality** — retired models, moved or renamed UI, removed features, changed defaults.

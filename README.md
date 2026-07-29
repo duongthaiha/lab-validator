@@ -7,6 +7,11 @@ models, renamed navigation, moved features, stale screenshots.
 Learning Campus is a **Skillable TMS** tenant hosted for Microsoft, so the
 validator drives the platform's supported APIs rather than scraping the UI.
 
+**Current findings:** [`docs/gapanalysis.md`](docs/gapanalysis.md) — the
+learner-facing gap list for *WorkshopPLUS: Azure AI Platform and Services*,
+including how much of the lab has actually been walked. Read the coverage table
+first: an absence of findings in a module means *not yet checked*, not *correct*.
+
 ## Credentials — read this first
 
 **This project never stores your Learning Campus password.** Sign-in goes
@@ -126,9 +131,12 @@ python scripts/browser_session.py --launch --profile "<your profile>"
 
 ```
 docs/approach.md                    architecture, findings and reuse guide
+docs/gapanalysis.md                 learner-facing gaps found in the target lab
 scripts/browser_session.py          attach to a signed-in browser; recon commands
+scripts/lab_drive.py                drive a running lab: instructions, creds, VM
 scripts/bootstrap_auth.py           fallback: sign-in → encrypted session
 src/lab_validator/browser.py        CDP launch/attach, profile management
+src/lab_validator/labclient.py      lab frames, window.api.v1, VM screen/click/type
 src/lab_validator/config.py         typed settings, SecretStr-backed
 src/lab_validator/secrets_store.py  DPAPI protect/unprotect helpers
 src/lab_validator/auth.py           storageState load/save, session health
