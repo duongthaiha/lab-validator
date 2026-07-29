@@ -157,6 +157,45 @@ ENV/
 env.bak/
 venv.bak/
 
+# ---------------------------------------------------------------------------
+# lab-validator: secrets and credential-bearing artifacts
+# ---------------------------------------------------------------------------
+# Anything that can authenticate as a real user. `.auth/` holds DPAPI-encrypted
+# Playwright storageState; even encrypted, it never belongs in git.
+.auth/
+*.storageState.json
+storage_state*.json
+secrets/
+*.pem
+*.pfx
+*.key
+
+# Dedicated Edge/Chrome profile used for CDP attach. Holds live session cookies.
+.browser-profile/
+
+# .env variants — allow only the documented template
+.env.*
+!.env.example
+
+# Playwright artifacts. Traces embed DOM snapshots, console output and full
+# request/response headers AND bodies; HAR and video are equally sensitive.
+# https://playwright.dev/docs/trace-viewer
+test-results/
+playwright-report/
+blob-report/
+traces/
+artifacts/
+evidence/
+*.har
+trace.zip
+*-trace.zip
+videos/
+
+# Lab-run output that may contain @lab.MaskedTextBox / CloudPortalCredential values
+runs/
+*.sarif
+!schemas/*.sarif
+
 # Spyder project settings
 .spyderproject
 .spyproject
