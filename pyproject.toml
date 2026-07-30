@@ -16,6 +16,7 @@ dependencies = [
     "httpx>=0.27",
     "azure-identity>=1.19",
     "azure-mgmt-cognitiveservices>=13.5",
+    "pillow>=11.0",
     "pywin32>=306; sys_platform == 'win32'",
 ]
 

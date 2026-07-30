@@ -29,7 +29,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,7 @@ VERDICTS = (
     "LAB006",  # broken link
     "LAB007",  # timing / quota -- includes "this step never finishes"
     "LAB008",  # undocumented mandatory step
+    "LAB009",  # defective sample code -- swallows failure or produces no output
     "BLOCKED",  # a dependency failed, so this could not be attempted
     "DEFERRED",  # deliberately not attempted; requires a justification
 )
@@ -58,7 +59,11 @@ VERDICTS = (
 SEVERITIES = ("critical", "major", "minor", "info")
 
 #: Verdicts that represent a real, learner-facing defect.
-FINDING_VERDICTS = frozenset(VERDICTS[2:10])
+#: Derived by name rather than by slice index so that adding a code to
+#: ``VERDICTS`` cannot silently drop the last one out of the finding set.
+FINDING_VERDICTS = frozenset(
+    v for v in VERDICTS if v.startswith("LAB") and v != "LAB000"
+)
 
 
 def utc_now() -> dt.datetime:
@@ -128,14 +133,32 @@ class Segment:
     title: str
     module: str | None = None
     anchor: str | None = None
-    start_line: int | None = None
-    end_line: int | None = None
+    # Heading ordinals, not source line numbers. The corpus is addressed by
+    # anchor and heading order because the instructions frame *accumulates*
+    # pages, so a source line number is not stable across a run.
+    start_heading: int | None = None
+    end_heading: int | None = None
     status: str = "pending"  # pending | in_progress | done | blocked | skipped
     started: str | None = None
     ended: str | None = None
     lab_minutes_at_start: int | None = None
     lab_minutes_at_end: int | None = None
     note: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Segment:
+        """Build from a manifest entry, tolerating the old ``*_line`` keys.
+
+        Run folders are evidence and outlive the code that wrote them, so a
+        field rename must never make an existing run unreadable.
+        """
+        data = dict(data)
+        for old, new in (("start_line", "start_heading"), ("end_line", "end_heading")):
+            value = data.pop(old, None)
+            if value is not None:
+                data.setdefault(new, value)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -415,6 +438,33 @@ class Run:
             if seg["id"] == segment_id:
                 return seg
         return None
+
+    def segments(self) -> list[Segment]:
+        """Manifest segments as typed objects.
+
+        Goes through :meth:`Segment.from_dict`, which is what lets a run folder
+        written by an older version still be read: the manifest is evidence, and
+        evidence has to stay readable across renames.
+        """
+        return [Segment.from_dict(s) for s in self.manifest.get("segments", [])]
+
+    def resolve_segment(self, segment_id: str) -> str:
+        """Map a user-supplied segment id onto a real one, or refuse.
+
+        A mistyped id used to be accepted silently, inventing a phantom segment
+        and leaving the real one marked "not reached" -- coverage the report
+        would then understate. Accept an exact id, or an unambiguous prefix so
+        "s03" is enough, and fail loudly on anything else.
+        """
+        ids = [seg["id"] for seg in self.manifest.get("segments", [])]
+        if segment_id in ids:
+            return segment_id
+        hits = [i for i in ids if i.startswith(segment_id)]
+        if len(hits) == 1:
+            return hits[0]
+        if not hits:
+            raise KeyError(f"unknown segment {segment_id!r}; known ids: {', '.join(ids)}")
+        raise KeyError(f"ambiguous segment {segment_id!r}; matches: {', '.join(hits)}")
 
     def start_segment(self, segment_id: str, lab_minutes: int | None = None) -> None:
         seg = self.segment(segment_id)

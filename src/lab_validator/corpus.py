@@ -151,6 +151,22 @@ class Outline:
                 return h
         return None
 
+    def section_by_anchor(self, anchor: str) -> Heading | None:
+        """Resolve an anchor to the *section* it names, not merely to an id.
+
+        Ids in this corpus are not unique: a module ``<h2>`` can carry the same
+        id as the ``<h1>`` section immediately beneath it. Resolving by id alone
+        then lands on the ``<h2>``, whose section bound is the ``<h1>`` one line
+        later, so the section silently reads as empty rather than failing. That
+        is the worst kind of bug for a differ -- it looks like "nothing to
+        check" instead of "could not resolve".
+        """
+        anchor = anchor.lstrip("#")
+        for head in self.sections():
+            if head.id == anchor:
+                return head
+        return self.by_id(anchor)
+
     def contents(self) -> list[TocLink]:
         """The primary table of contents, falling back to all in-page links."""
         primary = [t for t in self.toc if t.primary]
@@ -204,8 +220,8 @@ class Outline:
                     title=head.text,
                     module=module.text if module else None,
                     anchor=f"#{head.id}",
-                    start_line=head.order,
-                    end_line=end,
+                    start_heading=head.order,
+                    end_heading=end,
                 )
             )
         return segments
@@ -232,10 +248,18 @@ class Outline:
         return "\n\n".join(parts).strip()
 
     def _section_end(self, section: Heading) -> int:
+        """Last heading order belonging to ``section``.
+
+        The boundary predicate must be the same one :meth:`sections` uses, or a
+        heading that is not a section can still terminate one. The clamp is
+        belt-and-braces: a bound below the section's own order would produce an
+        empty slice that no caller can distinguish from a genuinely empty
+        section.
+        """
         for h in self.headings:
-            if h.order > section.order and h.level == 1:
-                return h.order - 1
-        return len(self.headings) - 1
+            if h.order > section.order and h.level == 1 and h.id:
+                return max(h.order - 1, section.order)
+        return max(len(self.headings) - 1, section.order)
 
     # ---- structural checks ---------------------------------------------
 
@@ -269,6 +293,31 @@ class Outline:
                         "One section is effectively unlabelled.",
                         {"label": label, "hrefs": sorted(hrefs)},
                         "major",
+                    )
+                )
+
+        # A duplicated id makes in-page navigation ambiguous: the browser
+        # resolves an anchor to whichever element comes first. Boilerplate ids
+        # ("introduction", "objectives") repeat in every lab and are noise, so
+        # report only where a *section* anchor is shadowed -- there a "jump to
+        # this lab" link lands on a summary heading instead of the lab itself,
+        # which is what a learner would actually notice.
+        by_anchor: dict[str, list[Heading]] = {}
+        for h in self.headings:
+            if h.id:
+                by_anchor.setdefault(h.id, []).append(h)
+        for anchor, heads in by_anchor.items():
+            if len(heads) > 1 and any(h.level == 1 for h in heads):
+                first = min(heads, key=lambda h: h.order)
+                found.append(
+                    Anomaly(
+                        "LAB006",
+                        f"Section anchor {anchor!r} is shared by {len(heads)} "
+                        f"headings (levels {sorted(h.level for h in heads)}). "
+                        f"An in-page link resolves to the level-{first.level} "
+                        "heading, not the section it names.",
+                        {"anchor": anchor, "levels": sorted(h.level for h in heads)},
+                        "minor",
                     )
                 )
 

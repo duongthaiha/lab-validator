@@ -46,6 +46,19 @@ resource_prefixes = [
 # model-lifecycle oracle: API "Deprecating" means the portal shows "Deprecated",
 # and API "Deprecated" means the portal shows "Retired". Compare the retirement
 # date to the run date; never string-match the word.
+#
+# ⚠️ Run 003 (2026-07-29) established that this list is NOT SATISFIABLE on a
+# Skillable lab subscription -- see gap analysis G-08. Both chat models refuse
+# to deploy with ServiceModelDeprecating, because "existing customer" is decided
+# per subscription and Skillable mints a fresh one per instance. Kept verbatim
+# because it is what the instructions say, and the whole point of this file is
+# to record the expectation the lab sets, not the one we wish it set. The
+# divergence is the finding.
+#
+# Also established, for whoever retargets this lab (G-22): the replacement must
+# be validated against the AGENTS API, not just chat completions. gpt-5-mini
+# works; gpt-5.6-* is rejected with "Unsupported parameter: 'top_p'"; every
+# third-party model is Marketplace-blocked by subscription policy.
 models = [
     "gpt-4o",
     "gpt-4o-mini",
@@ -60,6 +73,15 @@ legacy_ui_toggle = """
 Every lab navigates the legacy Microsoft Foundry left-hand menu, which is only
 reachable via the "New Foundry" experience toggle. New Foundry is now the
 default. If that toggle is removed, all labs break simultaneously.
+"""
+
+session_is_not_resumable = """
+The Skillable TMS session cookie is memory-only and the lab-client URL returns
+"Access Denied" when loaded directly -- it is only reachable through the
+enrolment launch flow, which has no SSO and therefore no unattended path.
+Restarting the controller browser mid-run ends the run and costs a human
+sign-in. Run 003 ended this way, before the lab clock expired. Drain a wedged
+browser in place; never force-restart it.
 """
 
 # Full human-fidelity execution is the default. Anything listed under

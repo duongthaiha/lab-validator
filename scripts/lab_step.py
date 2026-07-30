@@ -42,10 +42,40 @@ from lab_validator.imaging import (  # noqa: E402
     stability,
 )
 from lab_validator.labclient import LabClient  # noqa: E402
-from lab_validator.runlog import Run  # noqa: E402
+from lab_validator.report import write_segment  # noqa: E402
+from lab_validator.runlog import FINDING_VERDICTS, Run  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
+OUTLINE = ROOT / "artifacts" / "instructions" / "outline.json"
+
+
+def refresh_section_report(run: Run, segment_id: str) -> Path | None:
+    """Rewrite this section's own report so it is current after every step.
+
+    Written continuously rather than at the end because a run that dies at
+    section 9 of 23 should still leave nine finished reports behind. Rendering
+    is a pure function of the trace, so rewriting is cheap and idempotent, and
+    a withdrawn finding disappears from the report instead of needing an
+    erratum appended to it.
+    """
+    segment = next((s for s in run.segments() if s.id == segment_id), None)
+    if segment is None:
+        return None
+    outline = None
+    if OUTLINE.exists():
+        try:
+            from lab_validator.corpus import Outline
+
+            outline = Outline.load(OUTLINE)
+        except Exception:  # noqa: BLE001 - the task headings are a nicety, not the report
+            outline = None
+    try:
+        return write_segment(run, segment, outline)
+    except OSError as exc:
+        print(f"  (section report not written: {exc})", file=sys.stderr)
+        return None
+
 
 HELP = """\
 Actions (repeat --do; they run in the order given):
@@ -167,6 +197,13 @@ async def run_actions(
                 await lab.move(x, y)
             run.step(segment, action=f"{verb}:{x},{y}", surface="vm")
 
+        elif verb == "scroll":
+            parts = [p.strip() for p in arg.split(",")]
+            x, y = int(parts[0]), int(parts[1])
+            delta = int(parts[2]) if len(parts) > 2 else 400
+            await lab.wheel(x, y, delta)
+            run.step(segment, action=f"scroll:{x},{y},{delta}", surface="vm")
+
         elif verb == "focus":
             await lab.focus_vm()
             run.step(segment, action="focus", surface="vm")
@@ -262,6 +299,12 @@ async def main_async(args) -> int:
                 print("No run folder. Create one with scripts/lab_run.py --start", file=sys.stderr)
                 return 2
 
+            try:
+                args.segment = run.resolve_segment(args.segment)
+            except KeyError as exc:
+                print(exc.args[0], file=sys.stderr)
+                return 2
+
             if args.start_segment:
                 run.start_segment(args.segment, await lab.minutes_remaining())
 
@@ -273,8 +316,66 @@ async def main_async(args) -> int:
             if args.note:
                 run.step(args.segment, verdict=args.verdict, severity=args.severity,
                          note=args.note, instruction_ref=args.ref, surface="analysis")
-            print(f"run: {run.dir.name}  segment: {args.segment}  findings this step: {findings}")
+                if args.verdict in FINDING_VERDICTS:
+                    findings += 1
+            report = refresh_section_report(run, args.segment)
+            where = f"  -> {report.relative_to(run.dir)}" if report else ""
+            print(f"run: {run.dir.name}  segment: {args.segment}  "
+                  f"findings this step: {findings}{where}")
             return 0
+        finally:
+            await browser.close()
+
+
+def record_only(args, lab_minutes: int | None = None) -> int:
+    """Append bookkeeping without requiring a reachable lab.
+
+    Judgements about instruction text -- a wrong variable name, a stale path,
+    a step the corpus never mentions -- need no screenshot, and paying a CDP
+    attach plus a lab-clock query for each one is pure overhead on a walk that
+    records hundreds of them.
+
+    Segment transitions come through here too. Sampling the lab clock is
+    best-effort: a checkpoint must never be *blocked* by an unreachable lab,
+    because that is precisely when an honest record of how far the run got
+    matters most.
+    """
+    run = Run.open(args.run) if args.run else Run.latest(RUNS)
+    if run is None:
+        print("No run folder. Create one with scripts/lab_run.py --start", file=sys.stderr)
+        return 2
+    try:
+        segment = run.resolve_segment(args.segment)
+    except KeyError as exc:
+        print(exc.args[0], file=sys.stderr)
+        return 2
+
+    if args.start_segment:
+        run.start_segment(segment, lab_minutes)
+
+    finding = 0
+    if args.note:
+        run.step(segment, verdict=args.verdict, severity=args.severity,
+                 note=args.note, instruction_ref=args.ref, surface="analysis")
+        finding = 1 if args.verdict in FINDING_VERDICTS else 0
+
+    if args.end_segment:
+        run.end_segment(segment, args.end_segment, lab_minutes)
+
+    report = refresh_section_report(run, segment)
+    where = f"  -> {report.relative_to(run.dir)}" if report else ""
+    clock = "unknown" if lab_minutes is None else f"{lab_minutes} min"
+    print(f"run: {run.dir.name}  segment: {segment}  findings this step: {finding}"
+          f"  lab clock: {clock}{where}")
+    return 0
+
+
+async def sample_minutes(port: int) -> int | None:
+    """Read the lab clock, or ``None`` if the lab client cannot be reached."""
+    async with async_playwright() as pw:
+        browser, context = await attached_context(pw, port)
+        try:
+            return await LabClient.find(context).minutes_remaining()
         finally:
             await browser.close()
 
@@ -297,6 +398,18 @@ def main() -> int:
     p.add_argument("--ref", help="instruction anchor for --note, e.g. #setup-env-file")
     p.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
     args = p.parse_args()
+
+    # Anything without --do is bookkeeping: notes and segment transitions. Those
+    # only *want* the lab clock, they do not need it, so try for it and carry on
+    # without if the lab is gone.
+    if not args.do:
+        minutes = None
+        if args.start_segment or args.end_segment:
+            try:
+                minutes = asyncio.run(sample_minutes(args.port))
+            except Exception as exc:  # noqa: BLE001 - clock is strictly optional
+                print(f"  (lab clock unavailable: {type(exc).__name__})", file=sys.stderr)
+        return record_only(args, minutes)
 
     try:
         return asyncio.run(main_async(args))

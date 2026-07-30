@@ -1,0 +1,295 @@
+"""Turn a signed-in Learning Campus session into a starter target descriptor.
+
+Onboarding a new workshop was, until now, an act of archaeology: open the
+catalogue by hand, read IDs out of URLs, and hand-author a TOML file. That is
+the step where the person doing it has the least context, so it is exactly the
+step worth automating.
+
+The parsing and scaffolding here are deliberately pure -- they take already
+extracted DOM records, not a browser -- so the fiddly part is testable without a
+live lab session. ``scripts/lab_discover.py`` is the thin shim that supplies the
+DOM.
+
+One rule governs the scaffold: **never invent a value.** A descriptor exists to
+carry expectations, so a plausible-looking guess is worse than a blank, because
+it will be believed. Anything discovery cannot observe is emitted as a commented
+``TODO`` naming how to find it, and :mod:`lab_validator.targets` will report the
+resulting gaps rather than let a run walk with an invented expectation.
+"""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
+
+__all__ = ["Enrolment", "slugify", "parse_enrolments", "scaffold", "descriptor_for"]
+
+#: ``/ClassEnrollment/5928204`` -- the launch entry point for one enrolment.
+ENROLMENT_RE = re.compile(r"/ClassEnrollment/(\d+)\b", re.I)
+#: ``/Class/763682`` or ``?classId=763682``.
+CLASS_RE = re.compile(r"/Class(?:Details)?/(\d+)\b|[?&]classId=(\d+)\b", re.I)
+#: ``/LabProfile/79233``, ``labProfileId=79233`` -- the lab *profile* id.
+LAB_RE = re.compile(r"/LabProfile/(\d+)\b|[?&]labProfileId=(\d+)\b", re.I)
+
+
+@dataclass(frozen=True)
+class Enrolment:
+    """One launchable training the signed-in user is enrolled in."""
+
+    enrolment: int
+    title: str
+    href: str
+    class_id: int | None = None
+    lab_id: int | None = None
+
+    @property
+    def url(self) -> str:
+        return f"https://mslearningcampus.com/ClassEnrollment/{self.enrolment}"
+
+    def __str__(self) -> str:
+        bits = [f"enrolment {self.enrolment}"]
+        if self.class_id:
+            bits.append(f"class {self.class_id}")
+        if self.lab_id:
+            bits.append(f"lab {self.lab_id}")
+        return f"{self.title[:58]:60} {'  '.join(bits)}"
+
+
+def _clean_title(raw: str) -> str:
+    """Reduce an anchor's ``innerText`` to the workshop title.
+
+    Two problems, one fix. ``innerText`` on an anchor wrapping a whole card is
+    multi-line -- ``"title\\n18 Mar 2026\\nLaunch"`` -- and a raw newline is
+    illegal in a TOML basic string, so an unflattened title reaches the scaffold
+    and produces a descriptor that will not parse. It also poisons the derived
+    slug, and because the merge below prefers the *longest* title, the card blob
+    is exactly the variant that wins over the clean title link.
+
+    Taking the first non-empty line fixes both: on a card that is the title, and
+    on a plain title link it changes nothing. "Longest wins" then does the right
+    thing, because a bare ``Launch`` label loses to a real title.
+    """
+    for line in raw.splitlines():
+        cleaned = re.sub(r"\s+", " ", line).strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _first_group(match: re.Match | None) -> int | None:
+    if not match:
+        return None
+    for value in match.groups():
+        if value:
+            return int(value)
+    return None
+
+
+def slugify(title: str) -> str:
+    """A filesystem- and CLI-safe slug for a workshop title.
+
+    Workshop titles carry decoration the slug should not: a ``WorkshopPLUS -``
+    prefix, a trailing parenthesised edition date, and accented characters that
+    make a filename awkward to type on a different keyboard layout.
+    """
+    text = unicodedata.normalize("NFKD", title)
+    # Normalise dashes *before* the ASCII strip: en/em dashes and the like are
+    # not decomposable, so encode(errors="ignore") deletes them outright and the
+    # "WorkshopPLUS - " prefix below stops matching.
+    text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
+    text = text.encode("ascii", "ignore").decode("ascii").lower()
+    text = re.sub(r"^\s*workshop\s*plus\s*[-:]\s*", "", text)
+    text = re.sub(r"\([^)]*\)", " ", text)  # edition suffixes
+    text = re.sub(r"\b(all\s+modules|lab|labs|training)\b", " ", text)
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return re.sub(r"-{2,}", "-", text) or "untitled"
+
+
+def parse_enrolments(links: list[dict]) -> list[Enrolment]:
+    """Pick the launchable enrolments out of a flat list of anchor records.
+
+    ``links`` is what ``LINKS_JS`` in ``scripts/browser_session.py`` returns:
+    dicts with ``text`` and ``href``. Several anchors on the page point at the
+    same enrolment (title link, a "Launch" button, a thumbnail), so results are
+    collapsed by enrolment id and the longest human title wins -- a "Launch"
+    label identifies the row but does not name the workshop.
+    """
+    best: dict[int, Enrolment] = {}
+    for link in links:
+        href = (link.get("href") or "").strip()
+        enrolment = _first_group(ENROLMENT_RE.search(href))
+        if enrolment is None:
+            continue
+        title = _clean_title(link.get("text") or "")
+        found = Enrolment(
+            enrolment=enrolment,
+            title=title,
+            href=href,
+            class_id=_first_group(CLASS_RE.search(href)),
+            lab_id=_first_group(LAB_RE.search(href)),
+        )
+        prior = best.get(enrolment)
+        if prior is None:
+            best[enrolment] = found
+            continue
+        # Merge: keep the most informative title and any id either anchor knew.
+        best[enrolment] = Enrolment(
+            enrolment=enrolment,
+            title=max((prior.title, found.title), key=len),
+            href=prior.href or found.href,
+            class_id=prior.class_id or found.class_id,
+            lab_id=prior.lab_id or found.lab_id,
+        )
+    return sorted(best.values(), key=lambda e: e.title.lower())
+
+
+def _todo(key: str, how: str) -> str:
+    return f"# TODO {key}: {how}"
+
+
+def scaffold(enrolment: Enrolment, slug: str | None = None) -> str:
+    """Render a starter ``targets/<slug>.toml`` from what discovery observed.
+
+    Observed values are written as real keys. Everything else is a commented
+    TODO carrying the instruction for finding it, so the file never asserts an
+    expectation nobody checked.
+    """
+    slug = slug or slugify(enrolment.title)
+    lines = [
+        "# Target descriptor for one Skillable lab.",
+        "#",
+        "# Generated by scripts/lab_discover.py --scaffold. Every value below was",
+        "# OBSERVED; every TODO is a value discovery could not see. Fill the TODOs in",
+        "# from the running lab, then re-check with:",
+        f"#     python scripts/lab_run.py --check-target {slug}",
+        "#",
+        "# Do not guess. An invented expectation is worse than a missing one, because",
+        "# a run will believe it and report a divergence that is really a typo here.",
+        "",
+        f'slug = "{slug}"',
+        f'name = "{_escape(enrolment.title)}"',
+        "",
+        "[lab]",
+    ]
+    if enrolment.lab_id:
+        lines.append(f"id = {enrolment.lab_id}")
+    else:
+        lines.append(_todo("id", "lab profile id -- the number in the lab-client URL"))
+    if enrolment.class_id:
+        lines.append(f"class_id = {enrolment.class_id}")
+    else:
+        lines.append(_todo("class_id", "from the /Class/<id> link on the enrolment page"))
+    lines += [
+        f"enrollment = {enrolment.enrolment}",
+        _todo("edition", 'the "(YYYYMMDD)" edition string shown on the enrolment page'),
+        _todo("duration_hours", "the lab clock's starting value, in hours"),
+        f'enrollment_url = "{enrolment.url}"',
+        "",
+        "[environment]",
+        _todo("kind", 'e.g. ["virtualization", "cloud-slice"] -- what the lab hands out'),
+        _todo("cloud", 'e.g. "azure", if the lab includes a cloud slice'),
+        _todo("credential_hours", "how long cloud credentials last before a refresh"),
+        _todo("vm_user", "the signed-in account on the jumpbox"),
+        _todo("lab_files", "path to the lab files on the VM"),
+        "",
+        "[expect]",
+        "# Resource names usually carry a per-instance number, so match on prefix.",
+        _todo("region", "the region the instructions tell the learner to pick"),
+        _todo("resource_group", "resource group name, or its stable prefix"),
+        _todo("models", "models the instructions tell the learner to deploy"),
+        "",
+        "[risks]",
+        "# Structural dependencies worth re-asserting every run: one break, many",
+        "# broken segments. Add them as you find them.",
+        "",
+        "# Full human-fidelity execution is the default. Anything under [deferrals] is",
+        "# deliberately not attempted and MUST carry a justification that survives",
+        "# review; convenience is not a justification.",
+        "[deferrals]",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+#: TOML basic strings permit only tab among the control characters, and require
+#: these to be escaped. Anything else in C0/C1 becomes a \uXXXX escape.
+_TOML_ESCAPES = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\b": "\\b",
+    "\t": "\\t",
+    "\n": "\\n",
+    "\f": "\\f",
+    "\r": "\\r",
+}
+
+
+def _escape(value: str) -> str:
+    """Escape a string for a TOML basic string.
+
+    Titles come from `innerText`, so they can carry anything the page carries.
+    An unescaped control character makes the whole descriptor unparseable, which
+    turns a cosmetic oddity in a lab title into a file nobody can load.
+    """
+    out = []
+    for ch in value:
+        if ch in _TOML_ESCAPES:
+            out.append(_TOML_ESCAPES[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def descriptor_for(enrolment: Enrolment, targets_dir: Path) -> str | None:
+    """Slug of an existing descriptor for this enrolment, or ``None``.
+
+    Matched on **observed identity** (``lab.enrollment``, else ``lab.id``), not
+    on the derived slug. A curated descriptor's slug is usually hand-shortened --
+    this repo's own ``azure-ai-platform`` versus the derived
+    ``azure-ai-platform-and-services`` -- so a name-based check reports an
+    already-onboarded lab as new and then writes a second, blank descriptor
+    beside the curated one.
+    """
+    from .targets import Target, TargetError  # local: avoids an import cycle at module load
+
+    for slug in Target.available(targets_dir):
+        try:
+            target = Target.inspect(slug, root=targets_dir)
+        except TargetError:
+            continue  # a broken descriptor is someone else's problem, not a match
+        lab = target.lab if isinstance(target.lab, dict) else {}
+        if lab.get("enrollment") == enrolment.enrolment:
+            return slug
+        if enrolment.lab_id is not None and lab.get("id") == enrolment.lab_id:
+            return slug
+    return None
+
+
+def write_scaffold(
+    enrolment: Enrolment,
+    targets_dir: Path,
+    slug: str | None = None,
+    overwrite: bool = False,
+) -> Path:
+    """Write the scaffold, refusing to clobber a descriptor someone has curated."""
+    existing = descriptor_for(enrolment, targets_dir)
+    if existing and not overwrite:
+        raise FileExistsError(
+            f"targets/{existing}.toml already describes enrolment {enrolment.enrolment}. "
+            "Pass --overwrite to replace it, but note that a curated descriptor holds "
+            "findings a scaffold cannot regenerate."
+        )
+    slug = slug or existing or slugify(enrolment.title)
+    path = targets_dir / f"{slug}.toml"
+    if path.exists() and not overwrite:
+        raise FileExistsError(
+            f"{path} already exists. Pass --overwrite to replace it, but note that "
+            "a curated descriptor holds findings a scaffold cannot regenerate."
+        )
+    targets_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(scaffold(enrolment, slug), encoding="utf-8")
+    return path

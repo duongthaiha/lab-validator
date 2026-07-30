@@ -261,6 +261,21 @@ class LabClient:
         )
         await self.page.wait_for_timeout(300)
 
+    async def wheel(self, x: int, y: int, delta: int = 400) -> None:
+        """Scroll the VM under VM-screen coordinates.
+
+        Notebook outputs, portal blades and log panes routinely exceed one
+        screen, so without a wheel the validator can only ever observe the
+        first fold and would report "absent" for anything below it.
+        """
+        box = await self._canvas_box()
+        res_w, res_h = await self.resolution()
+        await self.page.mouse.move(
+            box["x"] + x * box["width"] / res_w, box["y"] + y * box["height"] / res_h
+        )
+        await self.page.mouse.wheel(0, delta)
+        await self.page.wait_for_timeout(500)
+
     async def focus_vm(self) -> None:
         box = await self._canvas_box()
         await self.page.mouse.click(
@@ -275,11 +290,16 @@ class LabClient:
         session and resolves before the VM has consumed it, so the settle
         time has to scale with length. A fixed delay silently truncates
         input: pressing Enter too early submitted only "https:" once.
+
+        60 ms/char was enough for browser fields but not for a PowerShell
+        console, where PSReadLine re-highlights the whole line on every
+        keystroke; a 165-character command still split across a continuation
+        prompt. 110 ms/char covers the slowest surface seen so far.
         """
         await self.console.evaluate(
             "async (t) => await window.api.v1.sendTextToEnvironment(t)", text
         )
-        await self.page.wait_for_timeout(1200 + 60 * len(text))
+        await self.page.wait_for_timeout(1500 + 110 * len(text))
 
     #: Playwright spells modifiers out; the shorthand a human reaches for on a
     #: keyboard is what ends up in a --do list, so accept both.
@@ -294,6 +314,10 @@ class LabClient:
         "pgdn": "PageDown",
         "return": "Enter",
         "space": " ",
+        "up": "ArrowUp",
+        "down": "ArrowDown",
+        "left": "ArrowLeft",
+        "right": "ArrowRight",
     }
 
     @classmethod

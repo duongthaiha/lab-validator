@@ -35,6 +35,30 @@ PROFILE_DIR = REPO_ROOT / ".browser-profile"
 
 DEFAULT_CDP_PORT = 9222
 
+#: How long to wait for the CDP handshake before giving up. Playwright's default
+#: is 180 s, which turns a wedged target into a three-minute stall on every step.
+#: A healthy attach completes in a second or two, so fail fast and let the caller
+#: retry or reset the browser.
+ATTACH_TIMEOUT_MS = 45_000
+
+#: Edge ships Copilot surfaces that materialise as ``edge://discover-chat-v2``
+#: and ``edge://newtab`` ``browser_ui`` targets plus prerendered
+#: ``copilot.microsoft.com`` iframes. They cannot be closed over CDP
+#: (``/json/close`` silently no-ops on them), and once present,
+#: ``connect_over_cdp`` blocks forever auto-attaching to them. Suppressing them
+#: at launch is the only reliable fix. ``EdgeSyncPromotion`` additionally keeps
+#: the profile clone from re-syncing over the copied session. Unknown feature
+#: names are ignored by the browser, so this list is safe to over-specify.
+SUPPRESSED_EDGE_FEATURES = (
+    "EdgeSyncPromotion",
+    "msEdgeCopilot",
+    "msCopilotSidebar",
+    "EdgeDiscoverChat",
+    "EdgeCopilotPrerender",
+    "msWebAssist",
+    "msUndersideButton",
+)
+
 _EDGE_PATHS = (
     Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
     Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
@@ -332,8 +356,12 @@ def launch_debug_browser(
         "--start-maximized",
         # Skillable lab launches use window.open and third-party cookies.
         "--disable-popup-blocking",
-        # Keep the clone from re-syncing over the copied session.
-        "--disable-features=EdgeSyncPromotion",
+        # Keep the clone from re-syncing over the copied session, and keep Edge's
+        # built-in Copilot surfaces out of the target list. Those appear as
+        # unclosable ``edge://`` browser_ui targets plus prerendered
+        # copilot.microsoft.com iframes, and Playwright's connect_over_cdp hangs
+        # indefinitely trying to auto-attach to them.
+        "--disable-features=" + ",".join(SUPPRESSED_EDGE_FEATURES),
     ]
     if start_url:
         args.append(start_url)
@@ -361,7 +389,9 @@ async def attach(playwright, port: int = DEFAULT_CDP_PORT):
             "Start the debug browser first:\n"
             "    python scripts/browser_session.py --launch"
         )
-    return await playwright.chromium.connect_over_cdp(cdp_endpoint(port))
+    return await playwright.chromium.connect_over_cdp(
+        cdp_endpoint(port), timeout=ATTACH_TIMEOUT_MS
+    )
 
 
 async def attached_context(playwright, port: int = DEFAULT_CDP_PORT):

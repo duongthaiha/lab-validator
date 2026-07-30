@@ -93,7 +93,7 @@ def main() -> int:
             match = None
             for seg in outline.segments():
                 if needle in (seg.id, (seg.anchor or "").lstrip("#")) or seg.id.startswith(needle):
-                    match = outline.by_id((seg.anchor or "").lstrip("#"))
+                    match = outline.section_by_anchor((seg.anchor or "").lstrip("#"))
                     break
             if match is None:
                 match = outline.by_id(needle)

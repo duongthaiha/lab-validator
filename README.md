@@ -12,6 +12,13 @@ learner-facing gap list for *WorkshopPLUS: Azure AI Platform and Services*,
 including how much of the lab has actually been walked. Read the coverage table
 first: an absence of findings in a module means *not yet checked*, not *correct*.
 
+**Status.** Run 003 walked all six Required Lab Setup sections plus both Lab 01
+sections — 8 of 23 — executing the work rather than checking reachability:
+1,569 recorded steps, 30 standing findings, 6 withdrawn on re-check. The headline
+result is that **the workshop cannot currently be completed by any learner**
+(gap `G-08`). Labs 02–10 are unwalked. Engineering lessons from the run are in
+[`docs/approach.md`](docs/approach.md) §2.8.
+
 ## Credentials — read this first
 
 **This project never stores your Learning Campus password.** Sign-in goes
@@ -111,6 +118,73 @@ is the only reliable way to discover routes. Likewise `--dump` surfaces controls
 that exist but are hidden, such as a lab launch button gated by a client-side
 countdown rather than a server-side lock.
 
+## Running a validation
+
+A run is a folder of evidence: an append-only trace, numbered screenshots and a
+manifest recording how far the walk got. Segments are resumable checkpoints, so
+a run that ends early is still worth reading.
+
+```powershell
+python scripts/lab_run.py --targets                  # list lab descriptors
+python scripts/lab_run.py --check-target <slug>      # validate one strictly
+python scripts/lab_run.py --start                    # new run from the live lab
+python scripts/lab_run.py --status                   # progress and verdict counts
+python scripts/lab_run.py --next                     # next section to walk
+python scripts/lab_run.py --report                   # roll-up + every section report
+python scripts/lab_run.py --retract <seq> --note "…" # withdraw a finding
+python scripts/lab_text.py --segment s08 --tasks     # what the lab asks for here
+```
+
+Individual steps are driven with an **ordered** action list, so a click that
+must land before typing actually does:
+
+```powershell
+python scripts/lab_step.py --segment s08 --label deploy `
+  --do click:820,410 --do 'type:gpt-5-mini' --do key:Enter `
+  --do until:quiet:4000 --do shot
+```
+
+Probes are lab-client conditions (`connected`, `quiet:MS`), not screen text —
+there is no OCR here. Long operations poll with a budget and emit heartbeats, so
+a wait is visible in the trace and a crash mid-wait is resumable.
+
+**Each section reports on itself, as the walk happens.** Every step refreshes
+`runs/<ts>/sections/<segment-id>.md`, so a run that dies at section 9 of 23
+still leaves nine finished, publishable reports rather than one roll-up that
+was never written. `gap-analysis.md` is the roll-up and links to each of them.
+Reports are rendered from the trace each time, never appended to — which is why
+a retraction removes a finding cleanly instead of needing an erratum.
+
+`--retract` matters as much as the rest: run 003 withdrew 6 of 36 findings. A
+validator that never withdraws anything is not checking itself.
+
+## Adding another lab
+
+Everything lab-specific is data in `targets/<slug>.toml` — ids, expected
+resources, region, risks, justified deferrals. Structure is **not** listed there;
+segments and tasks are derived from the instructions by `corpus.py`, so they stay
+correct when the lab author edits content.
+
+Start from discovery rather than hand-authoring the file:
+
+```powershell
+python scripts/lab_discover.py --list              # enrolments in the signed-in session
+python scripts/lab_discover.py --scaffold 5928204  # writes targets/<slug>.toml
+python scripts/lab_run.py --check-target <slug>    # what still needs filling in
+```
+
+The scaffold writes only values it **observed**, and leaves a `# TODO` naming how
+to find each one it couldn't. That asymmetry is deliberate: an invented
+expectation is worse than a missing one, because a run will believe it and report
+a divergence that is really a typo in the descriptor.
+
+A freshly scaffolded descriptor is therefore *incomplete by design* and will not
+load as runnable until the TODOs are filled in — `--check-target` lists exactly
+which.
+
+If walking a new workshop needs a code change, that is a bug in the engine, not
+a gap in the descriptor.
+
 ## Setup
 
 ```powershell
@@ -127,19 +201,44 @@ python scripts/browser_session.py --list-profiles
 python scripts/browser_session.py --launch --profile "<your profile>"
 ```
 
+```powershell
+pytest -q            # unit tests (no lab or browser required)
+ruff check src scripts tests
+```
+
 ## Layout
 
 ```
 docs/approach.md                    architecture, findings and reuse guide
 docs/gapanalysis.md                 learner-facing gaps found in the target lab
+targets/<slug>.toml                 per-lab descriptor — data only, no code
+
+scripts/lab_run.py                  start/status/report a validation run
+scripts/lab_step.py                 ordered actions; every verb becomes evidence
+scripts/lab_text.py                 print a section's instructions from the corpus
+scripts/lab_corpus.py               inspect the segmented instruction corpus
+scripts/lab_discover.py             list enrolments; scaffold a target descriptor
 scripts/browser_session.py          attach to a signed-in browser; recon commands
 scripts/lab_drive.py                drive a running lab: instructions, creds, VM
 scripts/bootstrap_auth.py           fallback: sign-in → encrypted session
+
+src/lab_validator/runlog.py         run folder, append-only trace, resume, redaction
+src/lab_validator/corpus.py         instruction segmenter and structural checks
+src/lab_validator/report.py         trace → per-section reports + roll-up
+src/lab_validator/targets.py        target descriptor loader and validator
+src/lab_validator/discovery.py      enrolment parsing and descriptor scaffolding
+src/lab_validator/imaging.py        screenshot capture, downscaled view copies
 src/lab_validator/browser.py        CDP launch/attach, profile management
 src/lab_validator/labclient.py      lab frames, window.api.v1, VM screen/click/type
 src/lab_validator/config.py         typed settings, SecretStr-backed
 src/lab_validator/secrets_store.py  DPAPI protect/unprotect helpers
 src/lab_validator/auth.py           storageState load/save, session health
+
+runs/<timestamp>/                   gitignored — screenshots contain live API keys
+  trace.jsonl                       append-only, one record per step
+  images/                           numbered evidence captures
+  sections/<segment-id>.md          each section's own report, written as it is walked
+  gap-analysis.md                   roll-up, links to every section report
 ```
 
 ## Design

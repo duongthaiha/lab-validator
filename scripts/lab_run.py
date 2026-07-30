@@ -5,6 +5,8 @@
     python scripts/lab_run.py --next                  # next section to walk
     python scripts/lab_run.py --report                # write gap-analysis.md
     python scripts/lab_run.py --finish complete
+    python scripts/lab_run.py --targets               # list target descriptors
+    python scripts/lab_run.py --check-target SLUG     # validate one strictly
 """
 
 from __future__ import annotations
@@ -12,7 +14,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -26,8 +27,9 @@ from lab_validator.browser import (  # noqa: E402
 )
 from lab_validator.corpus import Outline, extract  # noqa: E402
 from lab_validator.labclient import LabClient  # noqa: E402
-from lab_validator.report import render  # noqa: E402
+from lab_validator.report import render, write_segment  # noqa: E402
 from lab_validator.runlog import Run  # noqa: E402
+from lab_validator.targets import Target, TargetError  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
@@ -36,15 +38,44 @@ OUTLINE = ROOT / "artifacts" / "instructions" / "outline.json"
 MARKDOWN = ROOT / "artifacts" / "instructions" / "outline.md"
 
 
-def load_target(slug: str) -> dict:
-    path = TARGETS / f"{slug}.toml"
-    if not path.exists():
-        raise BrowserError(f"No target descriptor at {path}")
-    return tomllib.loads(path.read_text("utf-8"))
+def load_target(slug: str) -> Target:
+    try:
+        return Target.load(slug, root=TARGETS)
+    except TargetError as exc:
+        raise BrowserError(str(exc)) from exc
+
+
+def cmd_targets(args) -> int:
+    """List descriptors, or validate one. The onboarding entry point."""
+    if args.check_target:
+        try:
+            target = Target.load(args.check_target, root=TARGETS, strict=True)
+        except TargetError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(target.summary())
+        print("\nOK - descriptor is valid.")
+        return 0
+
+    slugs = Target.available(TARGETS)
+    if not slugs:
+        print(f"No target descriptors in {TARGETS}")
+        return 1
+    for slug in slugs:
+        try:
+            target = Target.load(slug, root=TARGETS)
+            warn = len(target.problems)
+            flag = f"  ({warn} warning{'s' if warn != 1 else ''})" if warn else ""
+            print(f"  {slug:<24} {target.name}{flag}")
+        except TargetError:
+            print(f"  {slug:<24} !! invalid -- run --check-target {slug}")
+    return 0
 
 
 async def cmd_start(args) -> int:
     target = load_target(args.target)
+    for problem in target.problems:
+        print(f"descriptor: {problem}", file=sys.stderr)
     async with async_playwright() as pw:
         browser, context = await attached_context(pw, args.port)
         try:
@@ -55,8 +86,8 @@ async def cmd_start(args) -> int:
 
             run = Run.create(
                 RUNS,
-                target.get("name", args.target),
-                lab=target.get("lab", {}),
+                target.name,
+                lab=target.lab,
                 instance=lab.instance_id,
                 corpus=MARKDOWN,
                 agent=args.agent,
@@ -108,11 +139,11 @@ def cmd_status(args) -> int:
     print(f"segments : {seg['done']}/{seg['total']} done, {seg['blocked']} blocked, "
           f"{len(seg['never_reached'])} not reached")
     print()
-    for item in run.manifest.get("segments", []):
+    for item in run.segments():
         mark = {"done": "x", "in_progress": ">", "blocked": "!", "skipped": "-"}.get(
-            item.get("status"), " "
+            item.status, " "
         )
-        print(f"  [{mark}] {item['id']:<34} {item.get('title', '')[:42]}")
+        print(f"  [{mark}] {item.id:<34} {(item.title or '')[:42]}")
     return 0
 
 
@@ -131,10 +162,21 @@ def cmd_report(args) -> int:
     run = latest(args)
     outline = Outline.load(OUTLINE) if OUTLINE.exists() else None
     anomalies = outline.anomalies() if outline else []
+
+    # Sections first: the roll-up links to them, and a link to a file that was
+    # never written is worse than no link at all.
+    written = 0
+    for segment in run.segments():
+        if segment.status == "pending":
+            continue
+        write_segment(run, segment, outline)
+        written += 1
+
     text = render(run, outline, anomalies)
     out = run.dir / "gap-analysis.md"
     out.write_text(text, encoding="utf-8")
     print(f"-> {out}  ({len(text):,} chars)")
+    print(f"-> {written} section report(s) under {run.dir / 'sections'}")
     return 0
 
 
@@ -163,12 +205,16 @@ def main() -> int:
     p.add_argument("--retract", type=int, metavar="SEQ", help="withdraw a finding by seq")
     p.add_argument("--note", help="reason, required with --retract")
     p.add_argument("--target", default="azure-ai-platform", help="target descriptor slug")
+    p.add_argument("--targets", action="store_true", help="list available target descriptors")
+    p.add_argument("--check-target", metavar="SLUG", help="validate a descriptor strictly")
     p.add_argument("--agent", default="copilot-cli", help="who is driving")
     p.add_argument("--run", help="run folder (default: most recent)")
     p.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
     args = p.parse_args()
 
     try:
+        if args.targets or args.check_target:
+            return cmd_targets(args)
         if args.start:
             return asyncio.run(cmd_start(args))
         if args.retract is not None:

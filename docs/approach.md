@@ -235,6 +235,155 @@ without it ever reaching stdout, a log, or a shell argument.
 the fixed sequence click→type, so a click meant to land *before* typing happened *after*.
 The step loop needs an explicit ordered action list, not a bag of flags.
 
+### 2.8 Doing the work, not checking reachability (run 003)
+
+Run 002 walked ~3 % of the corpus by checking that things were *reachable*. Run 003 walked
+Required Lab Setup plus Lab 01 by *actually executing* them — 1,569 steps, 249 images,
+30 standing findings, **6 retracted**. That retraction count is the headline lesson: at this
+depth the validator generates false positives faster than it generates findings, and most
+of what follows is machinery for not shipping them.
+
+#### Evidence discipline — how we produced (and caught) wrong findings
+
+**A negative claim needs an exhaustive read, not a scrollable one.**
+We reported that `AZURE_OPENAI_ENDPOINT` was absent from `.env`, from a screenshot of a
+terminal showing a key list. The terminal was **scrolled**. The variable was present all
+along; the "repair" we appended produced a duplicate, and the verification grep returning
+**two** lines is what exposed it. Two findings had to be withdrawn.
+→ **"X is absent" is only provable by an exhaustive measurement.** For files, an explicit
+per-key count (`Select-String -Pattern '^KEY=' | Measure-Object`), never a visual scan.
+Positive claims can rest on a screenshot; negative ones cannot.
+
+**Clear notebook outputs before executing, or you will grade the author's results.**
+`1-evaluation.ipynb` ships **with saved outputs baked in**. We spent real effort explaining
+why promptflow logs read `2025-08-17` when the VM clock read `2026-07-29` — the answer was
+that we were reading the lab author's run, not ours. It produced a phantom symptom that
+never existed on this machine.
+→ **Clear All Outputs, restart the kernel, then execute.** Any timestamp in output that
+predates the run start is the tell. This is now a mandatory preflight for any notebook step.
+
+**Prove root cause by a *change of error class*, not by the absence of an error.**
+The Relevance evaluator failed 404. Swapping one `.env` value changed the failure to a
+**400 on an unsupported parameter**. Neither run "passed" — but 404-routing → 400-parameter
+proves run A never reached a model and run B did. That is a stronger result than a green
+tick, because a green tick can come from a swallowed failure (see below).
+→ When a fix does not make a symptom disappear, check whether it **moved**. A moved symptom
+localises the cause; a vanished symptom may just mean you stopped looking.
+
+**Run a controlled A/B, and say what was held constant.**
+Same cell, same data, same deployment, fresh kernel each time, exactly one variable changed.
+Written that way, the finding survives review; written as "I changed some things and it got
+better", it does not.
+
+**Measure the option space; do not assume it.**
+"Substitute a different model" sounds cheap. Enumerating it: 163 models on the account, 50
+with `assistants` capability, 26 of those GA, **zero** third-party (all Marketplace-blocked
+by subscription policy), and the newest first-party family rejected by the Agents API.
+The recommendation that survived — `gpt-5-mini` works, `gpt-5.6-*` does not — is only
+defensible because the space was enumerated rather than sampled.
+
+**A green tick is not evidence, and this cuts both ways.**
+Two of the lab's own defects (G-21, G-25) are cells that report success while failing. The
+validator must therefore **never** treat the UI's own success signal as the observation.
+Read the artifact the step was supposed to produce — the status field, the file, the metric
+— not the absence of a red mark.
+
+#### Harness — faults that cost us the run
+
+**Edge's Copilot targets wedge `connect_over_cdp`.**
+After a few hours Edge acquires `edge://discover-chat-v2` and `edge://newtab` **browser_ui**
+targets plus prerendered `copilot.microsoft.com` iframes. Playwright auto-attaches to every
+target and blocks **forever** on those, so every step began burning its full 180 s timeout.
+`PUT /json/close` **silently no-ops on `edge://` targets** — they reappear in `/json/list`
+unchanged — so they cannot be cleaned up at runtime. Real `page` targets do close.
+→ Suppress them at launch (`browser.py: SUPPRESSED_EDGE_FEATURES`) and give `attach()` an
+explicit **45 s** timeout so the failure is fast and legible instead of a 180 s hang that
+looks like a slow lab.
+
+**Never force-restart the controller browser mid-run — it costs a human.**
+Restarting to clear the wedge dropped the Skillable session and ended the run. The
+constraints, all confirmed the hard way:
+- TMS auth is a **memory-only session cookie**; there is nothing on disk to reuse.
+- `https://labclient.labondemand.com/LabClient/<instance>` loaded directly returns
+  **"Access Denied"** — the lab client is only reachable *through* the enrolment launch flow.
+- Cookies cannot be re-cloned while the user's real Edge is running: the Cookies DB is held
+  under an exclusive lock (`[System.IO.File]::Open` → *"being used by another process"*).
+- The TMS login page has **no SSO button** — native username/password only.
+
+  → There is **no unattended recovery path.** Drain or work around a wedged browser in
+place; treat a restart as ending the run. Budget for this in run planning: the session, not
+the lab clock, was the binding constraint.
+
+**Finding the debug browser's root process.** `Get-CimInstance Win32_Process -Filter
+"Name='msedge.exe'"`, then take the one whose `ParentProcessId` is *not* itself an msedge
+pid and whose `CommandLine` contains `--remote-debugging-port=9222`.
+
+#### Engine defects the run exposed
+
+**A boundary predicate must match the selection predicate it partitions.**
+`sections()` selected `level == 1 and h.id`; `_section_end()` terminated on `level == 1`
+alone. A level-1 heading *without* an id could therefore end a section that `sections()`
+never started, silently mis-slicing the corpus. Segmenter bugs do not raise — they just
+attribute findings to the wrong lab.
+→ Whenever code splits a sequence, the "where does this end" test must be **the same
+predicate** as the "is this a start" test. Worth grepping for as a class.
+
+**Bookkeeping must not require the thing being observed.**
+`--start-segment` / `--end-segment` attached over CDP purely to sample the lab clock, so
+once the lab was gone we could not even *record* how far we had got — exactly when an honest
+checkpoint matters most.
+→ The clock is now **best-effort**: sampled if reachable, recorded as `unknown` if not, and
+the checkpoint always lands. Generalising: a run log must be writable in every state the run
+can be in, including "the target has disappeared".
+
+**Field names must not lie.** `Segment.start_line` / `end_line` held **heading ordinals**,
+not source lines — harmless until someone builds a report on them. Renamed to
+`start_heading` / `end_heading`, with `Segment.from_dict()` still accepting the old keys:
+**run folders are evidence and outlive the code that wrote them**, so a rename must never
+make an existing run unreadable.
+
+#### Driving VS Code and notebooks in the VM
+
+- **Cell-by-cell beats Run All**, and it is not close. A failure localises to one cell and
+  the traceback *is* the finding. Run All aborts the remainder, so you cannot tell *broken*
+  from *never reached* — which is the one distinction the whole product exists to make.
+- **Navigate deterministically:** `Escape` → `Ctrl+Home` → `Down` × n → `Ctrl+Enter`.
+  Clicking cells is unreliable; keyboard navigation from a known origin is not.
+- **Clicking a taskbar icon to switch apps is unreliable** — the VS Code icon failed twice,
+  and a second VS Code window sat at a different taskbar slot. Prefer keyboard activation.
+- **Coordinate mapping for downscaled evidence.** Full-resolution captures are too large to
+  read back, so `view/` copies are written at 1400 px wide against a 2000 px VM canvas:
+  **multiply coordinates read off a view copy by ≈1.4286**. Always read the `view/` copy;
+  always convert before clicking.
+- **`--do` quoting under PowerShell:** single-quote the whole argument, and to emit a literal
+  `'` **double it**. Never use a backtick before a quote. Keep typed commands **under
+  ~120 chars** — multi-line `foreach` blocks get truncated in transit, so prefer single-line
+  expressions.
+- **Long notebook output overshoots on scroll**; `scroll:X,Y,DELTA` with a negative delta to
+  come back is normal, not a fault.
+
+#### Reading the platform, not just the lab
+
+**Distinguish a lab defect from a platform state.** The single most important finding
+(G-08 — the chat models will not deploy) is *not* a typo in the instructions; it is the
+interaction between Microsoft's model-retirement policy ("existing customer" is decided
+**per subscription**) and Skillable minting a **fresh subscription per instance**. No amount
+of DOM diffing finds that. It took an oracle (the lifecycle API), a controlled substitution,
+and reading the retirement policy prose.
+→ The validator's ceiling is set by its oracles. Budget research time for *why* a step
+fails, not just *that* it does — the "why" is what the lab author can act on.
+
+**Dependency floors are a validation surface.** `requirements.txt` pins nothing
+(`azure-ai-evaluation>=1.10.0`), the image ships exactly the floor, and the documented
+`pip install` therefore **cannot** upgrade it. A stale SDK then rejected the only models the
+lab could still deploy. Checking installed-vs-available versions is cheap and found a real
+defect.
+
+**State an untested hypothesis as untested.** We did *not* upgrade the SDK to test the fix,
+because doing so mid-run would have destabilised the remaining labs. That is recorded in the
+finding as an explicit, labelled hypothesis for the lab author to verify — which is more
+useful than either silence or a guess dressed as a result.
+
 ---
 
 ## 3. Recommended architecture
@@ -320,6 +469,46 @@ did reach. Given that the best published computer-use agents score around **20 %
 completion on OSWorld 2.0**, and a 100-step lab at 98 % per-step reliability finishes only
 **13 %** of the time, *designing so partial runs are still valuable is not optional.*
 
+### 3.3b Report per section, while the walk is happening
+
+Run 004 changed the reporting model: **every section writes its own report, refreshed after
+every step**, into `runs/<ts>/sections/<segment-id>.md`. The roll-up `gap-analysis.md` still
+exists and links to them.
+
+Three reasons, in order of how much they cost us before we changed it:
+
+1. **A run that dies at section 9 of 23 should leave nine finished reports behind.** Run 003
+   walked 8 sections over ~10 hours and then lost its session; the only deliverable was a
+   single roll-up that had to be written afterwards from the raw trace. Every section that
+   *did* complete was already worth publishing hours earlier.
+2. **Nobody fixes a lab by reading a 30-finding digest.** The person who edits section 5 wants
+   section 5's findings, its instruction text, and its screenshots — not a document where those
+   are interleaved with twenty-two other sections.
+3. **It forces the honesty check to be per-section.** An unfinished section prints *"this
+   section is not finished, so absence of findings means nothing"* rather than "no defects
+   recorded". The roll-up's coverage table makes that claim globally; the section report has
+   to make it locally, where a reader is far more likely to over-read silence as approval.
+
+The renderer is a **pure function of the trace**, so it is regenerated rather than appended to.
+That is what makes retraction work: a withdrawn finding disappears from the report and is
+re-listed under *Withdrawn findings*, instead of needing an erratum bolted onto text that was
+accumulated as the walk went.
+
+Two defects surfaced immediately in the first section report, both worth keeping in mind
+because they are the same class of error as the merged diagnostics in §4.2:
+
+- **"Verified correct" was padded with the harness's own bookkeeping** — `settled after 7s`,
+  `42 chars`. Those are notes the *driver* emits, not judgements a learner made. The report was
+  crediting the run with 13 verifications when 2 had actually been made. Fixed by requiring
+  `surface == "analysis"`: a confirmation is something deliberately recorded, never a side
+  effect of clicking. The roll-up had the identical bug and was fixed with it.
+- **Every evidence row was labelled `shot`** — the action verb rather than what was captured.
+  The label is already in the filename, so printing the verb was pure noise.
+
+Both are the same failure: **two different kinds of record sharing one list, so the reader
+cannot tell them apart.** It is worth checking for deliberately, because each individual record
+was correct — only the grouping lied.
+
 ### 3.4 Defect taxonomy → SARIF
 
 Keep the `LAB001`–`LAB007` codes (retired model, missing resource/SKU, changed UI label,
@@ -379,6 +568,64 @@ place and should become a real command:
 
 Codifying these is not tidiness. Recon *is* the inner loop of this project — every new lab
 starts with the same "what is on this page and what can I reach" question.
+
+**Now done** (`scripts/lab_discover.py` + `src/lab_validator/discovery.py`). Two design
+choices there are worth carrying to anything similar:
+
+- **Split the pure part from the browser.** Parsing anchors into enrolments, slugifying a
+  workshop title and rendering the TOML are all pure functions taking already-extracted DOM
+  records. That is why 13 tests cover them while the lab session is unavailable — the
+  fiddly logic is exactly the part you cannot afford to debug only against a live lab that
+  costs a human sign-in to reach.
+- **A scaffold must never invent a value.** It writes what it observed and leaves a
+  `# TODO` naming how to find each thing it did not. A freshly scaffolded descriptor is
+  therefore incomplete *by design* and will not load as runnable. This forced a real
+  distinction in `targets.py`: `Target.load()` means "give me something a run can rely on"
+  and raises; `Target.inspect()` means "tell me what is wrong with this" and does not.
+  Answering "what is still missing?" with an exception would make the onboarding command
+  useless at precisely the moment it is needed.
+
+**Two bugs this shook out, both found by running the thing rather than reading it:**
+
+- The training-list URL was a guess (`/Learner/MyTraining`) and it 404s. The real learner
+  landing page is **`/User/Dashboard`**. The discriminator that found it is reusable: on an
+  unauthenticated session, a **real page behind auth redirects to `/User/Login`, while a
+  non-existent one redirects to `/Error/NotFound`**. Probing candidate paths signed *out*
+  therefore maps the URL namespace without needing an account at all.
+- More seriously, the command reported "no enrolments found" for a page that did not exist.
+  Three distinct states — *not signed in*, *page does not exist*, *signed in with nothing
+  enrolled* — had been collapsed into one message, each needing a different action from the
+  reader. A diagnostic that merges states sends people to debug the wrong problem; they are
+  now separate exceptions with separate remedies.
+
+**Five more found by independent review, all genuine, all now fixed with regressions:**
+
+- **A validator that checks key *names* but not value *types* still lets an expectation be
+  invented.** `models = "gpt-4o"` instead of `["gpt-4o"]` is the likeliest slip in this file,
+  and `list()` silently turned it into six single-letter model names — passing even
+  `strict=True`. `SCHEMA` now carries a type per key. (`bool` needs its own guard: it
+  subclasses `int`, so a flag where a count belongs would otherwise pass.)
+- **`innerText` on a card anchor is multi-line**, and the merge preferred the *longest*
+  title — so the blob `"title\n18 Mar 2026\nLaunch"` beat the clean title link. A raw newline
+  is illegal in a TOML basic string, so the scaffold wrote a descriptor that could not parse
+  and then died in a traceback. Fixed at the source by taking the first non-empty line (on a
+  card that *is* the title; on a title link it changes nothing), and defensively by escaping
+  the full TOML control-character set.
+- **Windows writes BOMs.** Notepad and PowerShell 5.1 both do it by default, and under plain
+  `utf-8` a BOM surfaces as `Invalid statement (at line 1, column 1)` — sending the onboarder
+  hunting a syntax error that does not exist. Reading as `utf-8-sig` fixes it; a UTF-16 file
+  (PS 5.1 `>` redirection) now raises a `TargetError` naming the real cause instead of
+  leaking a `UnicodeDecodeError` through every caller.
+- **The same merged-diagnostic bug, in the second place I wrote it.** `--list` separated the
+  three states carefully; `--scaffold` reported "that enrolment is not in your account" when
+  the truth was "this page has no enrolments on it". Writing the principle down did not stop
+  me repeating the mistake ten lines away — which is the argument for review, not for more
+  principles.
+- **Identity, not name.** The "don't clobber a curated descriptor" guard compared *derived
+  slugs*, but a curated slug is hand-shortened: this repo ships `azure-ai-platform` while
+  discovery derives `azure-ai-platform-and-services`. So `--list` showed the one onboarded
+  lab as new, and `--scaffold` would have written a second, blank descriptor beside the
+  curated one. Matching on observed `lab.enrollment`/`lab.id` fixes both.
 
 ### 4.2b The step loop needs ordered actions, not flags
 
@@ -444,6 +691,9 @@ material, not scratch:
 
 Ordered by *unblocked now* first, because the lab launch is gated.
 
+> **Status after run 003.** Items 1–7 below are **done** and are kept for the rationale, not
+> as a to-do list. The live list is at the end of this section under *Next*.
+
 ### Unblocked today — no lab instance required
 
 1. **Azure model-lifecycle oracle.** The highest-value, most deterministic component, and it
@@ -491,6 +741,31 @@ Ordered by *unblocked now* first, because the lab launch is gated.
    defects actually get caught. There is also a free integration-testing tier (5 concurrent,
    30-minute cap, non-billable) that would remove the 96-hour-instance problem entirely.
 
+### Next — the live list after run 003
+
+**A. Finish the walk.** 15 of 23 sections are unreached (Labs 02–10, both optional labs).
+Requires a human sign-in to launch a fresh instance; see *Never force-restart the controller
+browser* in §2.8 for why this cannot be automated away.
+
+**B. Generalise (phase 7C).** The engine is generic; nothing about lab 79233 is in code.
+- ~~`targets.py` — a `tomllib` loader so `targets/<slug>.toml` is read rather than
+  hand-parsed.~~ → **done**, with validation, `--check-target` and 16 tests.
+- ~~`scripts/lab_discover.py` — promote the recon flow into a supported command.~~ →
+  **done**, and it now *scaffolds* the descriptor rather than leaving it to be hand-authored
+  (§4.2). Verified against ground truth: for enrolment 5928204 it reproduces every
+  observable value in the curated descriptor, and emits 10 TODOs for the rest.
+- **Prove it on a second WorkshopPLUS lab.** Take it through preflight and setup. *Anything
+  that needs a code change to make that work is a generalisation bug — fix it in the engine,
+  not the descriptor.* This is the only real test of the split. **Still outstanding**, and
+  gated on a sign-in: enrolments can only be enumerated inside an authenticated session.
+
+**C. Housekeeping.** ~~Record Pillow as a dependency.~~ → done. ~~Annotate
+`targets/azure-ai-platform.toml`'s `[expect]` block.~~ → done (G-08/G-22 recorded there).
+
+**D. Two experiments worth a disposable instance.** Does `azure-ai-evaluation` ≥ 1.18 emit
+`max_completion_tokens` and clear G-26? Does `model-router` accept `max_tokens`? Both are
+labelled untested hypotheses in the gap analysis and should not stay that way.
+
 ---
 
 ## 6. Open questions
@@ -508,12 +783,23 @@ Ordered by *unblocked now* first, because the lab launch is gated.
   *launching* labs cheaply (free integration tier: 5 concurrent, 30-min cap, non-billable),
   even though it is no longer needed to read instructions.
 - Is a 96-hour instance re-launchable, or is the single required activity one-shot? Governs
-  how freely we can iterate.
+  how freely we can iterate. **Now the binding constraint** — run 003 ended when the browser
+  session was lost, not when the lab clock expired (§2.8).
 - **Is there an authoritative machine-readable lifecycle feed for Azure OpenAI *API
   versions*?** Run 001 could not check `2024-05-01-preview` / `2024-12-01-preview` for this
-  reason. Currently the largest oracle gap.
-- What is the VM's `Admin` password, and is it exposed via `getLabVariable()` or only in the
-  "Access and Credentials" instruction section? Needed before any in-VM step can run.
+  reason. Still **the largest oracle gap** after run 003 — every API-version reference in the
+  corpus remains unverifiable except by execution.
+- Which **second WorkshopPLUS lab** should prove the generalisation in phase 7C?
+
+**Resolved by validation run 003 (2026-07-29/30):**
+
+- ~~What is the VM's `Admin` password?~~ → Not needed. The Resources tab carries every
+  credential, and `type_credential_natively()` moves them into the VM without them ever
+  reaching stdout.
+- ~~Why do promptflow logs carry 2025-08 timestamps?~~ → The notebooks **ship with the
+  author's saved outputs**. Clear outputs and restart the kernel before executing (§2.8).
+- ~~Can an unavailable model simply be substituted?~~ → Not freely. The deployable set is
+  narrow and the Agents API rejects part of it; see gap analysis **G-22**.
 
 ---
 
@@ -526,3 +812,25 @@ Ordered by *unblocked now* first, because the lab launch is gated.
 4. **The agent borrows a session, never a credential.**
 5. **Version drift is a finding, not just metadata.** A new `contentVersion` or edition code
    is the strongest available prior that instructions moved.
+6. **A defect needs an oracle or a repeated observation** — never a single transient. Run 003
+   withdrew 6 of 36 findings; every one came from trusting something seen once.
+7. **Negative claims need exhaustive evidence.** "X is missing" is a measurement, not a
+   glance (§2.8).
+8. **A green tick is not an observation.** Read the artifact the step was meant to produce.
+   The labs' own worst defects are cells that succeed while failing — and a validator that
+   trusts success signals reproduces the same bug.
+9. **Record what was *not* reached, as loudly as what failed.** An absent finding must never
+   be readable as a pass. Coverage goes at the top of the report, before any finding.
+10. **The run log must be writable in every state the run can be in** — including "the target
+    has disappeared". Bookkeeping that depends on the thing being observed fails exactly when
+    you need it.
+11. **A tool that generates expectations must never invent one.** Emit what was observed and
+    mark the rest as unfilled. A plausible guess is worse than a blank, because it will be
+    believed — and the run will report a divergence that is really a typo in the descriptor.
+    Corollary: **validate types, not just key names.** `models = "gpt-4o"` where a list
+    belongs is not a typo the reader will catch; it is six invented model names.
+12. **Keep distinct failures distinct.** *Not signed in*, *page does not exist* and *signed in
+    with nothing there* need three different actions, so they need three different messages.
+    A diagnostic that merges states sends people to debug the wrong problem (§4.2).
+13. **Match on identity, not on a name you derived.** Any check that compares a generated
+    label against a human-curated one will silently miss, because humans shorten names.
