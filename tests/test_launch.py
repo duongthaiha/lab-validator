@@ -16,10 +16,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from lab_validator.browser import BrowserError  # noqa: E402
+from lab_validator.labclient import LabClient  # noqa: E402
 from lab_validator.launch import (  # noqa: E402
     LAUNCH_LABELS,
     LaunchOutcome,
     SignInTimeout,
+    await_lab_client,
     ensure_signed_in,
     signed_out,
     wait_for,
@@ -179,3 +182,78 @@ def test_needing_a_human_is_not_a_failure():
     outcome = LaunchOutcome(False, True, "countdown-gated")
     assert not outcome.ok
     assert outcome.needs_human
+
+
+# --- which lab client is this run about? -----------------------------------
+#
+# `find` used to return `pages[0]`. The launch guidance deliberately leaves an
+# old lab tab open so a re-run can pick it up, which makes "first tab" a
+# coin-flip between this lab and a previous one -- and the wrong one answers
+# every question fluently. These tests are the reason that is now a refusal.
+
+
+class FakePage:
+    def __init__(self, url):
+        self.url = url
+
+
+class FakeContext:
+    def __init__(self, *urls):
+        self.pages = [FakePage(u) for u in urls]
+
+
+A = "https://x/LabClient/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+B = "https://x/LabClient/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
+
+def test_no_lab_tab_says_to_launch_one():
+    with pytest.raises(BrowserError, match="Launch the lab first"):
+        LabClient.find(FakeContext("https://x/Home"))
+
+
+def test_one_lab_tab_is_simply_used():
+    assert LabClient.find(FakeContext(A, "https://x/Home")).instance_id.startswith("aaaa")
+
+
+def test_two_lab_tabs_are_refused_rather_than_guessed():
+    """The failure this prevents is silent: a run that reads a different lab's
+    instructions and reports them as this lab's."""
+    with pytest.raises(BrowserError) as exc:
+        LabClient.find(FakeContext(A, B))
+    assert "2 lab client tabs" in str(exc.value)
+    # Naming them is what makes the refusal actionable rather than annoying.
+    assert "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" in str(exc.value)
+    assert "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" in str(exc.value)
+
+
+def test_a_tab_that_predates_launch_is_not_the_one_launch_opened():
+    """The whole point of recording `known` before clicking Launch."""
+    lab = LabClient.find(FakeContext(A, B), known=[A])
+    assert lab.instance_id.startswith("bbbb")
+
+
+def test_an_instance_id_pins_it_exactly():
+    assert LabClient.find(FakeContext(A, B), instance_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                          ).instance_id.startswith("bbbb")
+
+
+def test_asking_for_an_instance_that_is_not_open_says_what_is():
+    with pytest.raises(BrowserError) as exc:
+        LabClient.find(FakeContext(A), instance_id="cccccccc-cccc-cccc-cccc-cccccccccccc")
+    assert "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" in str(exc.value)
+
+
+def test_known_covering_everything_falls_back_rather_than_finding_nothing():
+    """Resume opens no new tab. Preferring the fresh tab must not mean
+    refusing to use the only one there is."""
+    assert LabClient.find(FakeContext(A), known=[A]).instance_id.startswith("aaaa")
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_the_client_reports_ambiguity_instead_of_timing_out_blankly():
+    """Polling can never resolve two open tabs, so the message must say the
+    real problem rather than 'it never answered'."""
+    clock = FakeClock()
+    with pytest.raises(SignInTimeout, match="lab client tabs are open"):
+        await await_lab_client(FakeContext(A, B), budget_s=10, say=lambda _: None,
+                               sleep=clock.sleep, clock=clock)

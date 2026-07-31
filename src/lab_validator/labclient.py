@@ -35,6 +35,12 @@ class Credential:
         return f"{self.value[0]}{'*' * (len(self.value) - 2)}{self.value[-1]}"
 
 
+def instance_id_of(url: str) -> str:
+    """The lab instance GUID carried in a lab-client URL, or ``?``."""
+    m = re.search(r"/LabClient/([0-9a-f-]{36})", url)
+    return m.group(1) if m else "?"
+
+
 class LabClient:
     """A live Skillable lab instance."""
 
@@ -44,18 +50,56 @@ class LabClient:
     # ---- discovery -----------------------------------------------------
 
     @classmethod
-    def find(cls, context) -> LabClient:
-        pages = [p for p in context.pages if "/LabClient/" in p.url]
+    def candidates(cls, context) -> list[Page]:
+        return [p for p in context.pages if "/LabClient/" in p.url]
+
+    @classmethod
+    def find(cls, context, *, instance_id: str | None = None, known=()) -> LabClient:
+        """The one lab client this run is about -- or a refusal naming the rest.
+
+        Position is not identity. This used to return ``pages[0]``, and the
+        surrounding guidance deliberately leaves an old lab tab open so a
+        re-run can pick it up, so "first tab" could easily be *a different
+        lab* -- which would answer every question fluently and wrongly. A
+        wrong answer that is indistinguishable from a right one is the worst
+        thing a validator can produce, so ambiguity is refused rather than
+        resolved by guessing.
+
+        ``instance_id`` pins an exact instance. ``known`` is the set of
+        lab-client URLs that existed *before* Launch was clicked; anything
+        outside it is the tab that Launch just opened.
+        """
+        pages = cls.candidates(context)
+        if instance_id:
+            pinned = [p for p in pages if instance_id in p.url]
+            if not pinned:
+                raise BrowserError(
+                    f"No lab client tab for instance {instance_id}. "
+                    f"Open tabs: {cls._describe(pages)}."
+                )
+            pages = pinned
+        elif known:
+            fresh = [p for p in pages if p.url not in set(known)]
+            if fresh:
+                pages = fresh
         if not pages:
+            raise BrowserError("No lab client tab found. Launch the lab first, then retry.")
+        if len(pages) > 1:
             raise BrowserError(
-                "No lab client tab found. Launch the lab first, then retry."
+                f"{len(pages)} lab client tabs are open ({cls._describe(pages)}) and "
+                "nothing says which one this run is about. Close the ones you are not "
+                "using, or pass the instance id. Guessing here would read a different "
+                "lab's instructions and report them as this lab's."
             )
         return cls(pages[0])
 
+    @staticmethod
+    def _describe(pages) -> str:
+        return ", ".join(instance_id_of(p.url) for p in pages) or "none"
+
     @property
     def instance_id(self) -> str:
-        m = re.search(r"/LabClient/([0-9a-f-]{36})", self.page.url)
-        return m.group(1) if m else "?"
+        return instance_id_of(self.page.url)
 
     def _frame(self, marker: str) -> Frame:
         for f in self.page.frames:

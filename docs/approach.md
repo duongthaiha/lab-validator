@@ -887,6 +887,52 @@ Two consequences worth stating, because they are where the value actually lands:
   refuses and says why. Refusing is strictly better than guessing here, because
   the guess is indistinguishable from a real answer.
 
+  ### 2.18 Which lab is this? — position is not identity
+
+  The same shape turned up twice more, in the two places that pick *the thing to
+  work on*, and both picked `[0]`:
+
+  - `LabClient.find()` took the first browser tab whose URL contains
+    `/LabClient/`.
+  - `await_lab_client()` did the same while waiting after Launch.
+
+  Neither could fail loudly. A stale tab answers `minutes_remaining()` cheerfully,
+  serves instructions, and screenshots a VM — so the walk would run to completion
+  and file a gap analysis about **a different lab**, with evidence, timestamps and
+  screenshots that all corroborate each other. And this is not a remote
+  possibility: the surrounding advice *deliberately* leaves the old tab open
+  (*"the lab tab was left open on purpose, so re-running will pick it up"*), and
+  the standing rule against restarting the browser means tabs accumulate across a
+  session. The design made the collision likely and then resolved it by position.
+
+  The fix is the same principle the walk already applies to the product under
+  test — principle 13, *match on identity, not on a name you derived* — turned
+  back on the validator itself. Three cases now get three answers, because they
+  need three different actions:
+
+  | Tabs | Answer |
+  |---|---|
+  | none | *launch the lab first* — unchanged |
+  | one | use it |
+  | several | **refuse**, and name the instance ids |
+
+  Refusing is the interesting one. It is tempting to resolve ambiguity with a
+  heuristic — newest tab, longest-lived, most recently focused — and every such
+  rule is right most of the time, which is precisely what makes it dangerous: the
+  rare wrong answer is indistinguishable from a right one and there is no
+  downstream check that could catch it. Two disambiguators that *are* evidence
+  rather than heuristics: the caller records which lab tabs existed **before**
+  clicking Launch, so the new tab is identifiable by construction; and an explicit
+  instance id pins it exactly. Where neither applies, a human is asked. That costs
+  one interruption in a case that should be rare, and it is the only version of
+  this that cannot silently validate the wrong lab.
+
+  A detail worth keeping: the ambiguity is reported through the *wait*, not
+  swallowed by it. Polling can never resolve two open tabs, so `await_lab_client`
+  remembers the refusal and raises it instead of the generic "never answered"
+  timeout. A timeout message that describes the wrong problem sends the reader to
+  look at provisioning for fifteen minutes.
+
   ---
 
   ## 3. Recommended architecture
@@ -1405,3 +1451,9 @@ labelled untested hypotheses in the gap analysis and should not stay that way.
     A diagnostic that merges states sends people to debug the wrong problem (§4.2).
 13. **Match on identity, not on a name you derived.** Any check that compares a generated
     label against a human-curated one will silently miss, because humans shorten names.
+    The same rule binds the validator itself: never select the thing you are about to
+    work on by *position* — the first matching tab, the first file, the newest run. When
+    two candidates exist and nothing distinguishes them by identity, **refuse and name
+    them** rather than picking one. A heuristic that is right most of the time is worse
+    than a refusal, because its rare wrong answer is indistinguishable from a right one
+    and no later step can catch it (§2.18).

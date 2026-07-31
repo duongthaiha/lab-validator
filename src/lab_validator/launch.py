@@ -261,7 +261,8 @@ async def click_launch(page, *, budget_s: float = 180.0, say=print) -> LaunchOut
     return LaunchOutcome(True, False, "clicked Launch")
 
 
-async def await_lab_client(context, *, budget_s: float = 300.0, say=print):
+async def await_lab_client(context, *, budget_s: float = 300.0, known=(), say=print,
+                           sleep=None, clock=None):
     """Wait for the lab-client tab to exist *and* answer.
 
     A tab whose URL matches is not enough. The client is a frameset and
@@ -269,14 +270,26 @@ async def await_lab_client(context, *, budget_s: float = 300.0, say=print):
     navigated but not finished building its frames looks ready and then fails
     on the first call. Waiting for the API to answer is the difference between
     a clean start and a first step that dies for reasons nobody can reproduce.
+
+    ``known`` is the set of lab-client URLs open *before* Launch was clicked,
+    so the tab Launch just opened can be told apart from one left over from an
+    earlier lab. Selection itself is ``LabClient.find``'s job, including its
+    refusal to choose between two candidates.
     """
+    from .browser import BrowserError
     from .labclient import LabClient
 
+    ambiguous: list[str] = []
+
     async def probe():
-        pages = [p for p in context.pages if "/LabClient/" in p.url]
-        if not pages:
+        try:
+            lab = LabClient.find(context, known=known)
+        except BrowserError as exc:
+            # Several answered: that is a decision for a human, and polling
+            # will never resolve it. Remember it so the caller can say so.
+            if "lab client tabs are open" in str(exc):
+                ambiguous.append(str(exc))
             return None
-        lab = LabClient(pages[0])
         try:
             await lab.minutes_remaining()
         except Exception:  # noqa: BLE001 - frames still building
@@ -286,9 +299,13 @@ async def await_lab_client(context, *, budget_s: float = 300.0, say=print):
     lab = await wait_for(
         probe,
         budget_s=budget_s,
+        sleep=sleep,
+        clock=clock,
         on_heartbeat=lambda w: say(f"  ... waiting for the lab client to answer ({w:.0f}s)"),
     )
     if lab is None:
+        if ambiguous:
+            raise SignInTimeout(ambiguous[-1])
         raise SignInTimeout(
             "the lab client never answered. It may still be provisioning -- the lab "
             "tab was left open on purpose, so re-running will pick it up."

@@ -87,9 +87,11 @@ def test_every_state_changing_client_method_is_classified():
         and callable(getattr(labclient.LabClient, name, None))
         and name not in {
             # Plumbing and helpers, not capabilities: they route other calls or
-            # compute values without reaching the lab.
-            "find", "call", "console", "instructions", "find_credential",
-            "credential_value", "normalise_key",
+            # compute values without reaching the lab. `find`/`candidates`
+            # inspect the browser's own tab list, which is bookkeeping about
+            # *which* lab we are in, never an action inside one.
+            "find", "candidates", "call", "console", "instructions",
+            "find_credential", "credential_value", "normalise_key",
         }
     }
     unclassified = sorted(interesting - set(CAPABILITIES))

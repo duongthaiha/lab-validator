@@ -91,6 +91,7 @@ async def _walk(args) -> int:
     from .browser import attached_context
     from .corpus import extract
     from .discovery import resolve
+    from .labclient import LabClient
     from .launch import await_lab_client, click_launch, ensure_signed_in, signed_out
     from .preflight import preflight
     from .runlog import Run
@@ -148,11 +149,17 @@ async def _walk(args) -> int:
             if enrolment.url not in page.url:
                 await page.goto(enrolment.url, wait_until="domcontentloaded")
                 await page.wait_for_timeout(2500)
+            # Whatever lab tabs exist now predate this launch, so the tab that
+            # Launch opens can be told apart from one left over from an
+            # earlier lab. The guidance deliberately leaves those open.
+            known = [p.url for p in LabClient.candidates(context)]
+            if known:
+                print(f"note      : {len(known)} lab client tab(s) already open; ignoring them")
             outcome = await click_launch(page, budget_s=args.launch_budget)
             if outcome.needs_human:
                 print(f"\n  LAUNCH NEEDED — {outcome.reason}")
                 print("  Click Launch yourself in the browser window. I will wait.")
-            lab = await await_lab_client(context, budget_s=args.client_budget)
+            lab = await await_lab_client(context, budget_s=args.client_budget, known=known)
             print(f"instance  : {lab.instance_id}")
 
             # 4. Instructions.

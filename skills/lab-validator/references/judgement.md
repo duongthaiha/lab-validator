@@ -158,6 +158,22 @@ deployment *named* `gpt-4o` can serve an entirely different model. That defect
 does not announce itself; the lab appears to work and then fails obliquely, in
 several places at once, each of which reads as an unrelated bug.
 
+Turn the same rule on your own tooling. **Never select the thing you are about
+to work on by position** — the first matching window or tab, the first file, the
+newest folder. When several candidates exist and nothing tells them apart by
+identity, **refuse and name them**; do not resolve it with a heuristic. A
+heuristic that is right most of the time is worse than a refusal here, because
+its rare wrong answer looks exactly like a right one and nothing downstream can
+catch it. A validator that attaches to the wrong instance still produces
+screenshots, timestamps and findings that all corroborate each other — a
+confidently wrong report, which is the only output worse than none.
+
+Two disambiguators are evidence rather than guesswork, and both are cheap:
+record the candidates that existed *before* the action that creates the new one,
+so the new one is identifiable by construction; and accept an explicit id that
+pins it exactly. Where neither is available, ask the human. One interruption in
+a rare case beats validating the wrong target.
+
 ## 12. Never invent an expectation
 
 A tool that generates expectations must emit what was observed and mark the rest
