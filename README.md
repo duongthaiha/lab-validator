@@ -126,6 +126,25 @@ A run is a folder of evidence: an append-only trace, numbered screenshots and a
 manifest recording how far the walk got. Segments are resumable checkpoints, so
 a run that ends early is still worth reading.
 
+### The whole thing, end to end
+
+```powershell
+lab-validator session --launch --profile "<your profile>"   # 1. a browser to attach to
+lab-validator walk --url "<lab url>" --name "<lab title>"    # 2. you sign in; it does the rest
+
+# 3. repeat until it says stop:
+lab-validator next                                           # what to do now, and why
+lab-validator step --segment s01 --ref <task-anchor> `       #    do it, record what you saw
+  --do click:820,410 --do shot --verdict PASS
+lab-validator run --finish done                              #    when a section is complete
+
+lab-validator run --report                                   # 4. runs/<ts>/gap-analysis.md
+```
+
+Step 3 is a loop and step 2 is the only one needing a human. If the walk dies at
+section 9 of 23, re-running `lab-validator next` picks up exactly where it
+stopped and the nine finished section reports are already on disk.
+
 ### Start from a URL
 
 One command starts a run on any lab, including one this repo has never seen.
@@ -159,6 +178,72 @@ it"). A run with no descriptor says so, loudly, in both the console and the
 manifest; silence there would read as "nothing was expected and nothing was
 missing", which is the opposite of the truth.
 
+### Before anything else: the preflight
+
+`walk` runs a **preflight as segment 0** — it reads the lab's own Resources tab
+and any config the lab shipped, and checks they agree *before* the walk spends
+an hour discovering they don't. The two most expensive findings in run 003 were
+of exactly this kind, and both were invisible in the lab text.
+
+It is deliberately **non-fatal**: a preflight that halts the run on a check it
+could not perform would convert a small unknown into no report at all. Instead
+it publishes **its own blind spots** — every check it could not complete is
+listed in the report's Coverage section, next to the sections never reached.
+A check that quietly skipped would read as a check that passed.
+
+### Walking it: ask the loop what to do
+
+```powershell
+lab-validator next          # what to do now, and why
+```
+
+This is the part of a walk that is genuinely mechanical, and the only part worth
+automating: deciding what comes next and **refusing to advance past work nobody
+did**. Everything else — what an instruction means, whether the screen matches
+it, which side is at fault — needs judgement and stays with you.
+
+```
+NEXT: PERFORM  [s08]
+  why: 2 of 5 task(s) have no verdict yet
+  task: #3-deploy-the-model   [username -> VM/Username; password -> VM/Password]
+  task: #4-run-the-notebook
+```
+
+Four properties are worth knowing, because each exists to prevent a specific
+way a walk goes quietly wrong:
+
+- **Coverage is counted in tasks, not sections.** A section is a heading; a task
+  is a thing the instructions told a learner to do. The failure mode of the
+  reference walk was *a task skipped inside a section that then reported clean*,
+  and only task-level bookkeeping can see it. So a step must name the task it
+  answers (`--ref 3-deploy-the-model`), and a **section** reference is explicitly
+  rejected as coverage — one would vouch for every task beneath it.
+- **It is a pure function of the run folder.** Resuming a killed walk is the same
+  command as continuing a live one. A multi-hour unattended walk *will* be
+  interrupted, and a loop whose position lives in memory cannot survive that.
+- **It names the credentials a task is asking for** — resolved from the vault by
+  **label only**, so a move can be printed or logged without leaking anything.
+  A task asking for something the lab never issued is a *finding*, not an error:
+  that's a learner's dead end.
+- **`why` is load-bearing.** When a walk stops, the sentence explaining what the
+  loop believed at the time is the most useful thing in the folder.
+
+Two refusals you will meet, both intentional:
+
+| It says | Because |
+|---|---|
+| still asking for a task you believe you did | your `--ref` named a *section*; `lab-validator text --segment s08 --tasks` prints the real anchors |
+| asking you to REPORT a section you already reported | a finding was recorded *after* that report was written, so the report on disk no longer says what the run knows |
+
+### Act through the learner's controls
+
+A capability that *acts* on the lab by a route the learner does not have proves
+only that your route works. Reading state is never a bypass — look through
+anything you like. But where you act by a faster route, the run records it, and
+the report prints a **ledger** of which learner-path controls were never
+exercised. "The button works" is then a claim with evidence behind it rather
+than an assumption.
+
 ### The rest of the commands
 
 `lab-validator` is a front door over the scripts, which all still work directly.
@@ -169,7 +254,6 @@ lab-validator run --targets                          # list lab descriptors
 lab-validator run --check-target <slug>              # validate one strictly
 lab-validator run --start                            # new run from an already-open lab
 lab-validator run --status                           # progress and verdict counts
-lab-validator run --next                             # next section to walk
 lab-validator run --report                           # roll-up + every section report
 lab-validator run --retract <seq> --note "…"         # withdraw a finding
 lab-validator text --segment s08 --tasks             # what the lab asks for here

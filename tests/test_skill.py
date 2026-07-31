@@ -32,14 +32,30 @@ from lab_validator import cli  # noqa: E402
 SKILL = ROOT / "skills" / "lab-validator" / "SKILL.md"
 INSTALLED = Path.home() / ".copilot" / "skills" / "lab-validator" / "SKILL.md"
 
-INVOCATION = re.compile(r"^\s*lab-validator\s+(?P<rest>.+?)\s*$", re.M)
+INVOCATION = re.compile(r"^[ \t]*lab-validator[ \t]+(?P<rest>.+?)[ \t]*$", re.M)
+
+# The README is executed too -- by a human following it, which is the same
+# failure with a slower feedback loop. A guide that teaches a renamed flag does
+# not produce a helpful error; it produces a run that dies partway through a lab
+# with somebody waiting on it. So both documents get the same guard.
+README = ROOT / "README.md"
+DOCS = {"SKILL.md": SKILL, "README.md": README}
 
 
-def invocations() -> list[str]:
-    body = SKILL.read_text(encoding="utf-8")
+def invocations(path: Path = SKILL) -> list[str]:
+    body = path.read_text(encoding="utf-8")
     # Continuation lines end with a PowerShell backtick; join them first.
     body = re.sub(r"`\r?\n\s*", " ", body)
-    return [m.group("rest") for m in INVOCATION.finditer(body)]
+    # Both docs annotate examples with an aligned trailing comment. Require two
+    # spaces before the `#` so a real argument that contains one -- an
+    # instruction anchor like `--ref #setup-env-file` -- is not truncated into a
+    # different, still-plausible command.
+    body = re.sub(r"[ \t]{2,}#.*$", "", body, flags=re.M)
+    return [m.group("rest").strip() for m in INVOCATION.finditer(body) if m.group("rest").strip()]
+
+
+def documented() -> list[tuple[str, str]]:
+    return [(name, line) for name, path in DOCS.items() for line in invocations(path)]
 
 
 def flags_of(command: str) -> set[str]:
@@ -63,28 +79,29 @@ def flags_of(command: str) -> set[str]:
     return set(re.findall(r'"(--[a-z][a-z0-9-]*)"', src)) | {"--help"}
 
 
-def test_the_skill_contains_commands_at_all():
+@pytest.mark.parametrize("name", sorted(DOCS))
+def test_the_docs_contain_commands_at_all(name):
     """A guard on the guard: if the parsing regex ever stops matching, every
     other test here would pass vacuously."""
-    assert len(invocations()) >= 8
+    assert len(invocations(DOCS[name])) >= 8, f"{name} yielded almost no commands"
 
 
-@pytest.mark.parametrize("line", invocations())
-def test_every_documented_command_exists(line):
+@pytest.mark.parametrize("doc,line", documented())
+def test_every_documented_command_exists(doc, line):
     command = line.split()[0]
     assert command in cli.BUILTINS or command in cli.COMMANDS, (
-        f"the skill documents `lab-validator {command}`, which is not a command"
+        f"{doc} documents `lab-validator {command}`, which is not a command"
     )
 
 
-@pytest.mark.parametrize("line", invocations())
-def test_every_documented_flag_exists(line):
+@pytest.mark.parametrize("doc,line", documented())
+def test_every_documented_flag_exists(doc, line):
     parts = line.split()
     command, rest = parts[0], parts[1:]
     real = flags_of(command)
     used = {p for p in rest if p.startswith("--")}
     unknown = sorted(used - real)
-    assert not unknown, f"`lab-validator {command}` has no {unknown} (real: {sorted(real)})"
+    assert not unknown, f"{doc}: `lab-validator {command}` has no {unknown} (real: {sorted(real)})"
 
 
 def test_documented_verdict_codes_are_real():
