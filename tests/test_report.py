@@ -11,6 +11,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lab_validator.report import (  # noqa: E402
@@ -82,8 +84,38 @@ def test_retracted_finding_disappears(tmp_path):
     run.retract(rec["seq"], "second attempt succeeded; it was a transient")
     after = render_segment(run, section(run, "s00"))
     assert "### 1." not in after
-    assert "Withdrawn findings" in after
+    assert "Withdrawn judgements" in after
     assert "second attempt succeeded" in after
+
+
+def test_retracted_confirmation_stops_claiming_verification(tmp_path):
+    """A wrong PASS must be withdrawable too.
+
+    A confirmation asserts "this instruction was checked and matched reality".
+    Getting that wrong is worse than a spurious finding, because a lab author
+    reading it has no reason to look again. Retraction has to reach it.
+    """
+    run = make_run(tmp_path)
+    rec = run.step(
+        "s00",
+        verdict="PASS",
+        surface="analysis",
+        note="the lab gives no time estimate",
+    )
+    assert "no time estimate" in render_segment(run, section(run, "s00"))
+
+    run.retract(rec["seq"], "line 25 does state an estimate; I misread the corpus")
+    after = render_segment(run, section(run, "s00"))
+    assert "no time estimate" not in after
+    assert "line 25 does state an estimate" in after
+
+
+def test_mechanical_steps_cannot_be_retracted(tmp_path):
+    """A click asserts nothing, so there is nothing to withdraw."""
+    run = make_run(tmp_path)
+    rec = run.step("s00", action="click:1,2", surface="vision")
+    with pytest.raises(ValueError):
+        run.retract(rec["seq"], "changed my mind")
 
 
 def test_image_links_resolve_from_the_sections_folder(tmp_path):

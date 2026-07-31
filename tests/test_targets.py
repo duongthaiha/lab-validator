@@ -210,3 +210,26 @@ def test_shipped_descriptor_is_valid():
     target = Target.load("azure-ai-platform", root=REPO_ROOT / "targets", strict=True)
     assert target.lab_id == 79233
     assert "gpt-4o" in target.models
+
+
+def test_default_is_the_only_descriptor(tmp_path):
+    write(tmp_path, "demo", MINIMAL)
+    assert Target.default(tmp_path) == "demo"
+
+
+def test_default_refuses_to_guess_between_descriptors(tmp_path):
+    write(tmp_path, "demo", MINIMAL)
+    write(tmp_path, "other", MINIMAL)
+    with pytest.raises(TargetError, match="--target is required"):
+        Target.default(tmp_path)
+
+
+def test_default_explains_how_to_create_one(tmp_path):
+    with pytest.raises(TargetError, match="lab_discover.py --scaffold"):
+        Target.default(tmp_path)
+
+
+def test_engine_has_no_lab_specific_default():
+    """A default slug in the engine is how this becomes a single-lab script."""
+    source = (REPO_ROOT / "scripts" / "lab_run.py").read_text(encoding="utf-8")
+    assert 'default="azure-ai-platform"' not in source

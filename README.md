@@ -12,12 +12,14 @@ learner-facing gap list for *WorkshopPLUS: Azure AI Platform and Services*,
 including how much of the lab has actually been walked. Read the coverage table
 first: an absence of findings in a module means *not yet checked*, not *correct*.
 
-**Status.** Run 003 walked all six Required Lab Setup sections plus both Lab 01
-sections — 8 of 23 — executing the work rather than checking reachability:
-1,569 recorded steps, 30 standing findings, 6 withdrawn on re-check. The headline
-result is that **the workshop cannot currently be completed by any learner**
-(gap `G-08`). Labs 02–10 are unwalked. Engineering lessons from the run are in
-[`docs/approach.md`](docs/approach.md) §2.8.
+**Status.** Run 005 completed the corpus: **all 23 sections walked**, executing the work
+rather than checking reachability — 5,880+ recorded steps, 111 heartbeats, 980+ evidence
+images, **220+ standing findings**, 7 withdrawn on re-check. 20 sections completed and 3
+remain blocked by a defect. The headline result is unchanged and now fully evidenced:
+**the workshop cannot currently be completed by any learner** (gap `G-08`), compounded by
+a silent model substitution (`G-30`) and a `.env` file that is wrong in two independent
+ways (`G-70`, `G-71`). Findings are in [`docs/gapanalysis.md`](docs/gapanalysis.md);
+engineering lessons are in [`docs/approach.md`](docs/approach.md) §2.8–§2.10.
 
 ## Credentials — read this first
 
@@ -184,6 +186,10 @@ which.
 
 If walking a new workshop needs a code change, that is a bug in the engine, not
 a gap in the descriptor.
+
+While only one descriptor exists, `--target` can be omitted and every command
+infers it. Add a second descriptor and the engine stops guessing: `--target`
+becomes required rather than silently defaulting to whichever lab came first.
 
 ## Setup
 

@@ -166,6 +166,33 @@ class Target:
             return []
         return sorted(p.stem for p in root.glob("*.toml"))
 
+    @staticmethod
+    def default(root: Path | None = None) -> str:
+        """The slug to use when the caller did not name one.
+
+        Deliberately *not* a constant. Baking a slug into the engine is how a
+        validator quietly becomes a single-lab script: the default keeps working
+        for the lab it was written against, so nobody notices it is there until
+        a second lab exists and silently runs against the first one's
+        descriptor.
+
+        So: one descriptor on disk means there is no ambiguity to resolve and it
+        is used. Any other number is a question only the caller can answer, and
+        is raised as one.
+        """
+        slugs = Target.available(root)
+        if len(slugs) == 1:
+            return slugs[0]
+        if not slugs:
+            raise TargetError(
+                f"no target descriptors in {root or TARGETS_DIR}. "
+                "Create one with: python scripts/lab_discover.py --scaffold <enrolment>"
+            )
+        raise TargetError(
+            "several target descriptors exist, so --target is required: "
+            + ", ".join(slugs)
+        )
+
     # ---- validation -----------------------------------------------------
 
     def validate(self) -> list[Problem]:

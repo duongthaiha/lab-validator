@@ -169,7 +169,7 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
             if f.get("images"):
                 add("")
 
-    passes = [s for s in steps if is_confirmation(s)]
+    passes = [s for s in steps if is_confirmation(s) and s.get("seq") not in retracted]
     add("## Verified correct")
     add("")
     if not passes:
@@ -201,7 +201,7 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
         if s.get("kind") == "retraction" and s.get("segment") == segment.id
     ]
     if withdrawn:
-        add("## Withdrawn findings")
+        add("## Withdrawn judgements")
         add("")
         for s in withdrawn:
             add(f"- step `{s.get('retracts')}` — {s.get('note', 'no reason recorded')}")
@@ -346,7 +346,7 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         add("")
 
     # ---- verified correct ----------------------------------------------
-    passes = [s for s in steps if is_confirmation(s)]
+    passes = [s for s in steps if is_confirmation(s) and s.get("seq") not in retracted]
     add("## Verified correct")
     add("")
     if not passes:
@@ -385,11 +385,11 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     # ---- retractions ----------------------------------------------------
     withdrawals = [s for s in steps if s.get("kind") == "retraction"]
     if withdrawals:
-        add("## Withdrawn findings")
+        add("## Withdrawn judgements")
         add("")
-        add("Recorded during the walk, then withdrawn once the cause was understood. "
-            "They are listed rather than deleted so the report can be audited against "
-            "the raw trace.")
+        add("Findings and confirmations recorded during the walk, then withdrawn once "
+            "the cause was understood. They are listed rather than deleted so the report "
+            "can be audited against the raw trace.")
         add("")
         for s in withdrawals:
             original = next(

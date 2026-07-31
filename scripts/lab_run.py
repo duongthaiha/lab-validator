@@ -73,7 +73,8 @@ def cmd_targets(args) -> int:
 
 
 async def cmd_start(args) -> int:
-    target = load_target(args.target)
+    slug = args.target or Target.default(TARGETS)
+    target = load_target(slug)
     for problem in target.problems:
         print(f"descriptor: {problem}", file=sys.stderr)
     async with async_playwright() as pw:
@@ -93,7 +94,7 @@ async def cmd_start(args) -> int:
                 agent=args.agent,
                 segments=outline.segments(),
             )
-            run.manifest["targetSlug"] = args.target
+            run.manifest["targetSlug"] = slug
             run.manifest["labMinutesAtStart"] = await lab.minutes_remaining()
             run.manifest["structuralAnomalies"] = [
                 {"code": a.code, "severity": a.severity, "message": a.message}
@@ -204,7 +205,11 @@ def main() -> int:
     p.add_argument("--finish", metavar="STATUS", help="seal the run and report")
     p.add_argument("--retract", type=int, metavar="SEQ", help="withdraw a finding by seq")
     p.add_argument("--note", help="reason, required with --retract")
-    p.add_argument("--target", default="azure-ai-platform", help="target descriptor slug")
+    p.add_argument(
+        "--target",
+        default=None,
+        help="target descriptor slug (default: the only one on disk)",
+    )
     p.add_argument("--targets", action="store_true", help="list available target descriptors")
     p.add_argument("--check-target", metavar="SLUG", help="validate a descriptor strictly")
     p.add_argument("--agent", default="copilot-cli", help="who is driving")

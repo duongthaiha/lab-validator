@@ -384,6 +384,208 @@ because doing so mid-run would have destabilised the remaining labs. That is rec
 finding as an explicit, labelled hypothesis for the lab author to verify — which is more
 useful than either silence or a guess dressed as a result.
 
+### 2.9 Harness lessons from the deep-execution run (run 004)
+
+Run 004 is the first run to actually *execute* the labs — `pip install graphrag`, build an
+index, run red-team scans — rather than check that pages load. Everything below cost real
+time to learn.
+
+#### Reading results
+
+- **Read tracebacks from the saved `.ipynb`, not from the screen.** `Ctrl+S` in VS Code, then
+  parse the file on the VM:
+  `$nb = Get-Content $path -Raw | ConvertFrom-Json; $nb.cells[N].outputs | %{ $_.text -join ""; $_.traceback -join "`n" }`.
+  VS Code truncates long cell output behind a *"Output is truncated. View as a scrollable
+  element"* link that cannot be scraped, and screenshots of a wrapped 200-column traceback are
+  close to unreadable. The notebook file has the whole thing, in order, losslessly.
+- **Redirect rich-console tools to a file.** Anything using `rich` (GraphRAG is the offender
+  here) repaints and then *clears* the terminal, so a failure leaves an empty screen.
+  `cmd > run.log 2>&1` then tail the log. This turned an unexplainable blank screen into a
+  one-line diagnosis twice.
+- **`C:\` is not writable on the lab VM.** Scratch files go to `$env:USERPROFILE`.
+- **Green does not mean worked.** The single highest-value finding of Lab 09 is a scan that
+  prints `Scan completed successfully!` and `Overall ASR: 0.0%` having evaluated *zero*
+  attacks. Always look past the exit status to the artefact: file sizes, row counts, the
+  actual numbers in the JSON. `0/0` and `0/4` render almost identically to a human and mean
+  opposite things.
+
+#### Driving the VM
+
+- **A new VS Code window can be poisoned while the existing one is fine.** `code <file>`
+  spawned a second window that failed with *"The editor could not be opened due to an
+  unexpected error"* / *"Could not register service worker"*, and reloading it did not help.
+  The pre-existing window was healthy. **Open files with `Ctrl+P` inside the window that
+  already works**; use `Get-Process -Name Code | Select Id, MainWindowTitle` to tell them
+  apart. Do not assume one process per app.
+- **Interactive prompts eat queued keystrokes.** Keystrokes typed while a long command runs
+  are tty-buffered and execute afterwards — which is usually convenient, and occasionally
+  destructive: `az login` blocks on *"Select a subscription and tenant"*, so a queued command
+  was consumed as the answer (`Invalid selection`). Screenshot before typing into a terminal
+  that might be mid-prompt.
+- **Multi-line text sent with `type:` loses its trailing newline.** Follow with `key:Enter`.
+- **Clicking a taskbar button toggles.** If the target window is *already* focused, the click
+  minimises it, and every keystroke in the same `--do` chain silently goes to whatever was
+  behind it. This cost a run of the wrong cell and left a stray `>>` continuation prompt in
+  PowerShell. **Screenshot to establish focus before switching windows**, or make the switch
+  its own step and verify. A blind `click:<taskbar>` at the head of a chain is not idempotent.
+- **`until:quiet:<settle>:<budget>` is not a completion probe.** It returned immediately after
+  a `clear` and repeatedly mid-`pip install`, because a terminal that is thinking is visually
+  quiet. For long shell operations, prefer a fixed `wait:` plus `shot`, and poll.
+- **Coordinate scaling differs per crop, so recompute it.** Evidence is downscaled before
+  reading; the view→VM factor is a property of *that* crop, not of the harness. For a 1504×1104
+  full screenshot resized to 1300×955 it is **×1.157**; for the older 1128×828 view it was
+  ×1.333. Getting this wrong produces clicks that land 100 px off and look like flaky UI.
+
+#### Evidence hygiene
+
+- **Capture secrets by shape, never by value.** To audit a `.env`, print key names and value
+  *lengths*: `$p[0] + " = <" + $v.Length + " chars>"`. That is enough to prove a variable is
+  present, populated, and the wrong shape — which was exactly the Lab 09 finding — without
+  ever writing the secret to the trace.
+- **`runs/` stays gitignored.** One early screenshot contains a partial live API key.
+
+#### Discipline
+
+- **Verify, do not predict.** Two findings had to be retracted this run for predicting an
+  outcome instead of observing one: `pip install X` *without* `-U` is a **no-op** for an
+  already-installed distribution (no upgrade happened), and `prompt-tune --output` resolves
+  against **CWD** despite its own `--help` claiming "relative to the project root". Run the
+  command, then write the finding.
+- **A retraction is cheap; a wrong finding is not.** `lab_run.py --retract SEQ` exists for
+  this. Use it the moment evidence contradicts a recorded verdict.
+- **Credential lifetime is shorter than lab lifetime, and that is itself a finding.** The lab
+  account signs in with a **Temporary Access Pass**; the TAP expires long before the 96-hour
+  instance does, and every CLI-derived token dies with it. The failure does not look like an
+  auth failure — `!az login` simply hangs forever behind the Windows WAM broker, and the real
+  error only appears four cells later. Recovery that works unattended:
+  `az config set core.enable_broker_on_windows=false` → `az account clear` →
+  `az login --use-device-code --scope <resource>/.default`, then complete
+  `https://login.microsoft.com/device` **in the browser on the VM**, where the interactive
+  session is still valid even though the TAP is not.
+
+---
+
+### 2.10 Harness lessons from the corpus-completion run (run 005)
+
+Run 005 finished the remaining seven sections — all four Lab 10 database modules and both
+optional-lab notebooks. The work shifted from *clicking through portals* to *executing and
+repairing code on the VM*, and the lessons follow that shift.
+
+#### `nbconvert` is a far better notebook executor than clicking cells
+
+```powershell
+python -m jupyter nbconvert --to notebook --execute --allow-errors `
+  --ExecutePreprocessor.timeout=240 --output out.ipynb in.ipynb
+```
+
+It runs **every** cell, keeps going past failures (`--allow-errors`), and stores each
+traceback in the output file. Summarising is then a two-line PowerShell pass over
+`.cells[].outputs`. This is dramatically faster and more reliable than driving the VS Code
+UI cell by cell, and it removes the ambiguity between *failed* and *never reached* that
+"Run All" creates.
+
+Three traps:
+
+- **`jupyter` may not be on `PATH`** in the VM's PowerShell even when it is installed. Use
+  `python -m jupyter …`.
+- **"No error output" is not success.** Cells wrapped in `try/except` report clean while
+  printing an error string. Always follow up with a text scan:
+  `[regex]::Matches($allText,'Error|Traceback|Exception|400').Count`.
+- **Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM**, and `nbformat`
+  rejects it with `NotJSONError: Notebook does not appear to be JSON: '\ufeff{…'`. Write
+  patched notebooks with `[System.IO.File]::WriteAllText($path, $json)`, which is UTF-8
+  without BOM.
+
+#### Prove a defect by *fixing* it on a scratch copy
+
+The most valuable output of run 005 was not "this lab is broken" but "this lab is broken
+**for exactly these N reasons**, and here is the run that proves nothing else is wrong."
+The pattern: copy the artifact, apply one minimal fix per known defect, re-run, and record
+both the broken and the fixed result. It separates *configuration* defects from *content*
+rot — three modules that looked dead turned out to be sound once two `.env` lines were
+corrected.
+
+Keep the patches minimal and mechanical so the diff itself is the finding:
+
+```powershell
+$j = Get-Content 'x.ipynb' -Raw
+$j = $j.Replace('../../../.env','../.env.fixed')
+$j = $j.Replace('max_tokens=','max_completion_tokens=')
+$j = $j -replace 'temperature\s*=\s*[0-9.]+','temperature=1'
+```
+
+Patching **values** rather than removing **keyword arguments** keeps the code shape intact
+and avoids `TypeError` from an invalid kwarg.
+
+#### Rewriting a SQL object from its own definition
+
+`object_definition()` returns a `CREATE` form that will not string-match a
+`CREATE OR ALTER` pattern, so the obvious "read it, replace a substring, re-run it" fails
+with `Msg 2714 There is already an object named …`. The reliable sequence is
+`drop procedure …` followed by `exec sp_executesql @definition`.
+
+#### Terminal output lives outside the usual crop
+
+Command results print at **column 0**, outside the `crop((330, …))` used for portal
+screenshots. Crop from `x=0` when reading a shell, or the evidence image is blank.
+
+#### Clicking the taskbar button of the already-foreground app *minimises* it
+
+This silently redirected an entire command sequence into the wrong window. Either take a
+screenshot to confirm focus before typing, or skip the taskbar click when the target app is
+already active.
+
+#### Keep typed lines short
+
+Long `--do type:` payloads wrap in the VM console and can pick up a stray Enter, leaving
+PowerShell at a `>>` continuation prompt that swallows everything after it. Split into
+several short typed lines — session variables persist between them, so a multi-step
+PowerShell pipeline can be built up incrementally and read back at the end.
+
+### 2.11 "Blocked" is a status, not a finding
+
+The single most valuable lesson from the addendum pass, and the one most likely to
+generalise to every other lab this engine ever walks.
+
+Lab 08 sat for two runs as one line — *blocked, GraphRAG resource has no deployments*. That
+felt like a complete answer: a learner genuinely cannot proceed, so what more is there to
+say? Re-opening it produced **six further defects**, each independently fixable, and
+**corrected the blocker's own factual claim** (the resource had one deployment, not zero).
+
+The failure mode is specific and worth naming. A blocker terminates *the learner's* path,
+so it feels like it terminates *the validator's* path too. It does not. The instructions
+past the blocker are still claims about the world, and most of them can be checked without
+ever clearing the block:
+
+| Checkable without clearing the blocker | Lab 08 example |
+|---|---|
+| Does the command still have the shape the lab assumes? | `graphrag init` is interactive; `--query` is now positional |
+| Do the tool's **defaults** match what the lab told you to create? | defaults are `gpt-4.1` / `text-embedding-3-large`; the lab said `gpt-4o-mini` / `ada-002` |
+| Does the config the lab builds actually reference the things it told you to make? | no `sed` ever sets `model:` |
+| Can the prerequisite even be installed on the stated platform? | `litellm==1.92.0` is manylinux-only |
+| Does the stated version range match the package metadata? | lab says Python 3.10+; graphrag 3.1.1 needs 3.11+ |
+| Is every URL well-formed? | endpoint exported with no `https://` scheme |
+
+None of that needed the lab to run. All of it came from **package metadata and upstream
+source at the exact version the lab resolves to** — PyPI's JSON API for wheel/platform and
+`requires_python` facts, and the GitHub tree at the matching tag for defaults and CLI shape.
+That is a cheap, offline, highly reliable oracle, and it is available for any lab that pins
+or installs a package.
+
+Two operational rules follow:
+
+1. **Never let a segment end at `BLOCKED` with a single finding.** Treat the blocker as the
+   *first* finding and keep reading. Budget a static pass over the remainder.
+2. **Re-verify the blocker's factual claim before publishing it.** G-40 asserted "zero
+   deployments"; one `az ... deployment list` showed one. An overstated finding costs more
+   credibility than a missing one, because it is the kind of thing a lab author will check
+   first and use to dismiss the rest of the report.
+
+There is a reporting consequence too: the `report.py` roll-up should treat a segment whose
+only record is `BLOCKED` as **incomplete**, not as covered. Coverage counted by *segments
+reached* flatters the run; what matters is whether the instructions in that segment were
+each compared against something.
+
 ---
 
 ## 3. Recommended architecture

@@ -66,6 +66,24 @@ FINDING_VERDICTS = frozenset(
 )
 
 
+def _is_judgement(step: dict) -> bool:
+    """Does this step assert something about the lab, rather than just do work?
+
+    Findings assert an instruction is wrong. Confirmations -- a ``PASS``
+    recorded deliberately on the analysis surface with a note -- assert the
+    opposite. Both are claims the report repeats, so both must be withdrawable.
+    A click or a screenshot asserts nothing and has nothing to withdraw.
+    """
+    if step.get("verdict") in FINDING_VERDICTS:
+        return True
+    return (
+        step.get("verdict") == "PASS"
+        and step.get("surface") == "analysis"
+        and bool(step.get("note"))
+        and step.get("kind") != "retraction"
+    )
+
+
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
 
@@ -373,21 +391,27 @@ class Run:
         )
 
     def retract(self, seq: int, reason: str) -> dict:
-        """Withdraw an earlier finding, keeping both records.
+        """Withdraw an earlier judgement, keeping both records.
 
-        Findings get recorded before their cause is always understood, and
+        Judgements get recorded before their cause is always understood, and
         some later turn out to be the harness misreading the lab. Deleting the
         record would be the tidy option and the wrong one: the trace is
         evidence, and a report that quietly loses entries cannot be audited.
         Appending a retraction keeps the original visible while removing it
-        from the findings list, with the reason attached.
+        from the report, with the reason attached.
+
+        Both directions are retractable. A wrong ``PASS`` is as damaging as a
+        wrong finding -- it claims an instruction was verified correct when it
+        was not -- so confirmations can be withdrawn too. Mechanical steps
+        (clicks, screenshots) carry no claim and so cannot be retracted.
         """
         target = next((s for s in self.steps() if s.get("seq") == seq), None)
         if target is None:
             raise ValueError(f"No step with seq {seq} to retract")
-        if target.get("verdict") not in FINDING_VERDICTS:
+        if not _is_judgement(target):
             raise ValueError(
-                f"seq {seq} has verdict {target.get('verdict')!r}, which is not a finding"
+                f"seq {seq} has verdict {target.get('verdict')!r} on surface "
+                f"{target.get('surface')!r}, which carries no judgement to retract"
             )
         return self.step(
             target.get("segment", ""),
