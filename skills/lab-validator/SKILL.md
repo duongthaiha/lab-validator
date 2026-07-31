@@ -97,6 +97,19 @@ else, so it is also how you resume a walk that was interrupted. It will not let
 you advance past a task nobody judged, and when it stops it tells you what is
 still unaccounted for.
 
+It also names the lab-issued values each task is asking for, so you do not have
+to spot them:
+
+```
+task: #4-set-the-values   [api key -> Azure/API Key; endpoint -> Azure/Endpoint]
+task: #5-sign-in          [username -> NOT ISSUED by this lab]
+```
+
+Type a satisfied one with `--do 'cred:Azure/API Key'` — never by hand, and never
+by pasting the value into a note. **An ask marked `NOT ISSUED` is a finding**
+(`LAB002`, `domain=setup`): the instruction wants something this lab never handed
+out, which is the learner's dead end, not yours.
+
 Read the whole section first. Do **not** work from the task list alone —
 prerequisites, warnings and "if you see X, do Y" notes live in the prose, and
 missing one produces a false finding.

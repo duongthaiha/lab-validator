@@ -28,12 +28,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .asks import Ask, asks_in
 from .corpus import Outline
 from .report import segment_filename
 from .runlog import FINDING_VERDICTS, Run, Segment
 
 __all__ = [
     "Move",
+    "credential_asks",
     "coverage_kind",
     "RESERVE_MINUTES",
     "next_move",
@@ -180,6 +182,38 @@ def _mis_scoped(run: Run, segment: Segment, outline: Outline | None) -> bool:
     return segment.anchor.lstrip("#") in _refs_used(run, segment.id)
 
 
+def _task_bodies(segment: Segment, outline: Outline | None) -> dict[str, str]:
+    if coverage_kind(segment, outline) != "enumerated":
+        return {}
+    section = outline.section_by_anchor(segment.anchor)
+    return {t.id: (t.text + "\n" + t.body) for t in outline.tasks(section) if t.id}
+
+
+def credential_asks(
+    segment: Segment,
+    outline: Outline | None,
+    labels: dict[str, str] | None,
+    refs: list[str] | None = None,
+) -> dict[str, list[Ask]]:
+    """Which lab-issued values each task is asking for.
+
+    Operating a walk by hand, a human notices "sign in with the username from
+    the Resources tab" and goes and fetches it. An autonomous walk has to be
+    told, and the only place that can say so is the move that asks for the task.
+
+    Only labels cross this boundary, never values: resolution runs over
+    :meth:`Vault.label_index`, so nothing here can leak a secret even if the
+    move is printed to a console or written to the manifest.
+    """
+    bodies = _task_bodies(segment, outline)
+    wanted = refs if refs is not None else list(bodies)
+    found = {}
+    for ref in wanted:
+        if (body := bodies.get(ref)) and (a := asks_in(body, labels)):
+            found[ref] = a
+    return found
+
+
 def _has_read(run: Run, segment_id: str) -> bool:
     """Did this section get read through the learner's own scroll?
 
@@ -208,11 +242,15 @@ def next_move(
     *,
     minutes_remaining: int | None = None,
     reserve: int = RESERVE_MINUTES,
+    labels: dict[str, str] | None = None,
 ) -> Move:
     """Decide the next move from persisted state alone.
 
     Called with no arguments beyond the run, this is also the resume path: a
     killed walk continues by asking the same question again.
+
+    ``labels`` is the vault's label index — labels only, never values — so the
+    move can name the credentials the next tasks are asking for.
     """
     # The clock comes first, and it is checked before anything else because
     # every other move costs lab time. A stop decided halfway through a section
@@ -287,13 +325,27 @@ def next_move(
                 "vouch for every task under it — so pass --ref with the task's own "
                 "anchor, listed below, or this will keep asking."
             )
+        found = credential_asks(current, outline, labels, unjudged)
+        missing = sorted({a.term for asked in found.values() for a in asked if not a.satisfied})
+        if missing:
+            why += (
+                f". These task(s) ask for {', '.join(missing)}, which this lab did not "
+                "issue — that is a finding about the setup, not a reason to stop."
+            )
         return Move(
             "assess" if blocked else "perform",
             current.id,
             why=why,
             tasks=unjudged,
-            detail={"judged": judged, "blocked": blocked,
-                    "misScopedRefs": _mis_scoped(run, current, outline)},
+            detail={
+                "judged": judged,
+                "blocked": blocked,
+                "misScopedRefs": _mis_scoped(run, current, outline),
+                # Labels and vault references only. No value ever reaches a Move,
+                # so printing one or writing it to the manifest cannot leak.
+                "asks": {ref: [str(a) for a in asked] for ref, asked in found.items()},
+                "unsatisfiedAsks": missing,
+            },
         )
 
     if not _report_written(run, current):

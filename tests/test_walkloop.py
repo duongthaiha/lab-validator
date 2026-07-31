@@ -543,3 +543,97 @@ def test_a_genuinely_complete_run_is_not_hedged(tmp_path):
         "a caveat printed on a clean run is noise, and noise is how real caveats "
         "stop being read"
     )
+
+
+# ---- credential-aware instruction following ------------------------------
+#
+# Operating by hand, a human reads "sign in with the username from the
+# Resources tab" and goes and fetches it. An autonomous walk has to be told,
+# and the move that asks for the task is the only place that can tell it.
+
+
+def outline_with_credential_task() -> Outline:
+    return Outline(title="Demo", headings=[
+        Heading(order=0, level=1, id="setup", text="Setup"),
+        Heading(
+            order=1, level=3, id="task-1", text="1. Sign in",
+            body="Sign in using the username shown on the Resources tab.",
+        ),
+        Heading(order=2, level=1, id="lab-01", text="Lab 01"),
+    ])
+
+
+def test_the_move_names_the_credential_the_next_task_wants(tmp_path):
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    scrolled(run, "s00")
+
+    move = next_move(run, outline_with_credential_task(), labels={"username": "cred-1"})
+
+    assert move.detail["asks"]["task-1"] == ["username -> cred-1"]
+    assert move.detail["unsatisfiedAsks"] == []
+
+
+def test_an_ask_the_lab_never_issued_is_reported_not_swallowed(tmp_path):
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    scrolled(run, "s00")
+
+    move = next_move(run, outline_with_credential_task(), labels={"password": "cred-9"})
+
+    assert move.detail["unsatisfiedAsks"] == ["username"]
+    assert "did not issue" in move.why, (
+        "the instruction asks for something the lab never handed out; that is a "
+        "setup finding, and a loop that silently skipped it would hide it"
+    )
+
+
+def test_the_move_never_carries_a_credential_value(tmp_path):
+    """Moves get printed to consoles and written into manifests.
+
+    Built from a *real* vault holding a *real* value, because the version of
+    this test that passes a hand-written label map proves nothing: the secret
+    never enters the system, so its absence downstream is guaranteed by the
+    fixture rather than by the code. The value has to be in the vault for the
+    label index's exclusion of it to mean anything.
+    """
+    from lab_validator.labclient import Credential
+    from lab_validator.vault import Vault
+
+    secret = "S3cr3t-Value-Never-Printed"  # noqa: S105 - a fixture, deliberately fake
+    vault = Vault.capture([Credential(scope="VM", label="Username", value=secret)])
+    assert secret in {c.value for c in vault.credentials}, "the fixture must hold it"
+
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    scrolled(run, "s00")
+
+    move = next_move(run, outline_with_credential_task(), labels=vault.label_index())
+
+    assert move.detail["asks"]["task-1"] == ["username -> VM/Username"]
+    assert secret not in repr(move.detail)
+    assert secret not in move.why
+
+
+def test_without_a_vault_the_asks_are_unsatisfied_not_absent(tmp_path):
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    scrolled(run, "s00")
+
+    move = next_move(run, outline_with_credential_task())
+
+    assert move.detail["unsatisfiedAsks"] == ["username"], (
+        "no captured credentials means nothing can be supplied, which is not the "
+        "same as the instruction asking for nothing"
+    )
+
+
+def test_prose_that_asks_for_nothing_produces_no_asks(tmp_path):
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    scrolled(run, "s00")
+
+    move = next_move(run, make_outline(), labels={"username": "cred-1"})
+
+    assert move.detail["asks"] == {}
+    assert "did not issue" not in move.why

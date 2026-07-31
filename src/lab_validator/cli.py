@@ -294,6 +294,7 @@ def cmd_next(args) -> int:
     """
     from .corpus import Outline
     from .runlog import Run
+    from .vault import Vault
     from .walkloop import describe, next_move
 
     runs_root = Path(args.runs or "runs")
@@ -311,13 +312,20 @@ def cmd_next(args) -> int:
     if outline is None:
         print("note: no corpus outline found, so task coverage cannot be checked")
 
-    move = next_move(run, outline, minutes_remaining=args.minutes)
+    # Labels only. The vault's values stay in the vault; what the loop needs is
+    # the ability to say "this task wants the admin password", not the password.
+    labels = None
+    with contextlib.suppress(Exception):
+        labels = Vault.load(run.dir).label_index()
+
+    move = next_move(run, outline, minutes_remaining=args.minutes, labels=labels)
     print(describe(run, outline))
     print()
     print(f"NEXT: {move.action.upper()}" + (f"  [{move.segment_id}]" if move.segment_id else ""))
     print(f"  why: {move.why}")
     for ref in move.tasks:
-        print(f"  task: #{ref}")
+        asked = (move.detail.get("asks") or {}).get(ref)
+        print(f"  task: #{ref}" + (f"   [{'; '.join(asked)}]" if asked else ""))
     if move.detail:
         print(f"  {move.detail}")
     return 0

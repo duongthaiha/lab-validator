@@ -852,6 +852,30 @@ Two consequences worth stating, because they are where the value actually lands:
   loop cannot relax the rule, so instead it detects the mis-scoping and names the
   fix in the same sentence it asks the question.
 
+  **The loop is also where credential-awareness lands.** Operating by hand, a
+  human reads *"sign in with the username from the Resources tab"*, goes and
+  fetches it, and thinks nothing of it. An autonomous walk has to be told, and the
+  move that asks for a task is the only place that can tell it. So each requested
+  task carries the lab-issued values its text is asking for, resolved against the
+  vault:
+
+  ```
+  task: #1-sign-in       [username -> VM/Username; password -> VM/Password]
+  task: #2-set-endpoint  [api key -> NOT ISSUED by this lab]
+  ```
+
+  Two properties make that safe and useful rather than merely convenient. First,
+  **only labels cross the boundary** — resolution runs over `Vault.label_index()`,
+  so deciding which credential an instruction wants never requires holding one,
+  and a move can be printed to a console or written into a manifest without
+  thought. That claim is now tested against a vault holding a real value; the
+  earlier version of the test passed a hand-written label map, which proved
+  nothing because the secret never entered the system at all. Second, **an
+  unsatisfiable ask is a finding, not an error**: the instruction wants something
+  this lab never issued, which is a `LAB002 / domain=setup` defect and a learner's
+  dead end. A loop that quietly skipped it would hide precisely the class of
+  defect the walk exists to find.
+
   ---
 
   ## 3. Recommended architecture
