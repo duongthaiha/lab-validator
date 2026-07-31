@@ -236,6 +236,42 @@ opinion about.
 button proves nothing. Press the button and read the artifact it was supposed to
 produce. The most dangerous lab defects are steps that *succeed while failing*.
 
+### Signing in: name the login, never the credential
+
+A lab issues several credentials, and more than one of them is called
+`Username` / `Password`. They are all strings; only one opens the screen in
+front of you. Do not choose between them.
+
+```powershell
+lab-validator step --segment s04 --label vm-signin `
+  --do signin:vm --do until:quiet:4000 --do shot
+```
+
+| Use | When the screen is |
+| --- | --- |
+| `signin:vm` | the machine's own login — a Windows lock screen, an RDP prompt |
+| `signin:portal` | a cloud sign-in — Azure, Entra, Microsoft 365 |
+| `signin:portal/username` | the account page that precedes the password page |
+
+`signin:ROLE` types the **password** by default, because both flows end at a
+password box. Add `/username` for the account field.
+
+Judge the login from **what you can see**, not from what the task says you are
+doing. A step titled "Sign in to the Azure portal" begins on the VM's lock
+screen if the VM is locked, and the correct first move is `signin:vm`. The tool
+resolves the credential from the lab's own scopes; if two could match, it
+refuses and names them — supply the role it could not work out, never a
+credential.
+
+Guessing here is not a harmless retry. The wrong password produces "the
+password is incorrect", which is indistinguishable from a genuine credential
+defect, so a guess does not just fail — it manufactures a false finding about
+the lab.
+
+**A sign-in the instructions never mention is itself a finding.** Labs commonly
+document the cloud login and say nothing about the machine login the learner
+meets first. Record it (`LAB004`, minor, `domain=instruction`) and carry on.
+
 ## Step 7 — Record a verdict for each instruction
 
 ```powershell

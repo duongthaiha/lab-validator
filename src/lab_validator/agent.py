@@ -31,6 +31,7 @@ is always a shell. So the agent gets the learner's controls and nothing else.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import subprocess
@@ -43,7 +44,7 @@ from pydantic import BaseModel, Field
 
 from .corpus import Outline
 from .runlog import Redactor, Run
-from .vault import Vault
+from .vault import Vault, role_of
 from .walkloop import Move, next_move, unjudged_tasks
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -158,6 +159,32 @@ class Tools:
 
     def instructions(self, segment: str) -> str:
         return _say(_cli("text", "--segment", segment, "--run", str(self.run_dir)))
+
+    def inventory(self) -> list[str]:
+        """Every credential ref this lab handed out, grouped by sign-in.
+
+        The model needs this for a reason the ask-matcher cannot cover: a lab
+        can *require* a credential its instructions never mention. The reference
+        workshop presents a locked Windows VM before its first written step and
+        says nothing about it anywhere in 109,703 characters of text; the
+        machine password is on the Resources tab and nowhere else. Told only
+        about credentials the text asked for, a model facing that screen reaches
+        for the one family it has heard of and types an Azure e-mail address
+        into a Windows password box.
+
+        Roles are shown alongside, so the two families are visibly separate
+        rather than a flat list in which one password looks like another.
+        """
+        with contextlib.suppress(Exception):
+            if vault := Vault.load(self.run_dir):
+                by_role = {
+                    f"{c.scope}/{c.label}": role_of(c.scope) for c in vault.credentials
+                }
+                return [
+                    ref + (f"  [signin:{role}]" if role else "")
+                    for ref, role in by_role.items()
+                ]
+        return []
 
     def tasks(self, segment: str) -> str:
         return _say(
@@ -286,6 +313,13 @@ def prompt_for(move: Move, tools: Tools) -> str:
     text = tools.instructions(move.segment_id)
     anchors = ", ".join(move.tasks) or "(none named)"
     asks = _asks_line(move)
+    held = tools.inventory()
+    vault = (
+        "\nCredentials this lab issued, and which sign-in each belongs to: "
+        + "; ".join(held)
+        if held
+        else ""
+    )
 
     if move.action == "assess":
         job = (
@@ -303,7 +337,7 @@ def prompt_for(move: Move, tools: Tools) -> str:
     return f"""{job}
 
 Section: {move.segment_id} - {move.why}
-Tasks still without a verdict: {anchors}{asks}
+Tasks still without a verdict: {anchors}{asks}{vault}
 
 The instruction text a learner reads:
 ---
@@ -323,6 +357,17 @@ Rules:
   settles which side is wrong.
 - Never type a credential literally. Use the action cred:SCOPE/LABEL so the
   value is sent without being printed.
+- Match the credential to the screen, not to the task. For a sign-in, name the
+  login and let the tool pick: signin:vm types the machine password,
+  signin:portal the cloud password, and /username (signin:portal/username) the
+  account field. This lab issues more than one password and they are not
+  interchangeable, so choosing between them yourself is how a working lab gets
+  reported as broken. A task called "Sign in to Azure Portal" can still be
+  sitting behind a Windows sign-in that wants the machine account: read the
+  screen first, and say what you see before you type.
+- A screen the instructions never mention is itself worth recording. Get past
+  it if the Resources tab gives you what it needs, and record the omission
+  against the task it blocked.
 """
 
 
@@ -629,8 +674,8 @@ class ActP(BaseModel):
     actions: list[str] = Field(
         description=(
             "lab actions in order: click:X,Y  dblclick:X,Y  move:X,Y  focus  "
-            "type:TEXT  cred:SCOPE/LABEL  key:Control+s  wait:MS  until:connected  "
-            "shot  dialog  read  page:N"
+            "type:TEXT  signin:vm  signin:portal  cred:SCOPE/LABEL  key:Control+s  "
+            "wait:MS  until:connected  shot  dialog  read  page:N"
         )
     )
     label: str = Field(default="", description="filename label for captures")

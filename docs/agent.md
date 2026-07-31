@@ -125,6 +125,42 @@ primed from the vault, so lab-issued credentials never enter the transcript —
 and the model asks for one by label (`cred:SCOPE/LABEL`) rather than ever seeing
 a value.
 
+### Sign-ins are bound in code, not chosen by the model
+
+`lab_act` takes `signin:vm` and `signin:portal`, and they behave unlike every
+other action: **there is no parameter through which the wrong credential can be
+requested.** The model names the *login* it can see; `vault.signin()` resolves
+the credential from the lab's own scopes.
+
+This is deliberate asymmetry. A lab hands out several rows called `Username`
+and `Password` in different scopes, indistinguishable by type and often by
+appearance. Given a free choice the model will pick the one its *task* mentions
+rather than the one its *screen* wants — which is exactly what happened in the
+second live run, thirteen times in a row. See approach.md §2.23.
+
+The prompt therefore lists every credential the lab issued annotated with the
+sign-in it serves (`[signin:vm]`, `[signin:portal]`), not just the ones the
+instruction text asked for. Labs routinely document the cloud login and never
+mention the machine login the learner meets first; a model told about one
+family reaches for that family.
+
+`signin:` verifies against the **frame**, not the keystrokes, using the same
+`imaging.stability` measure as the quiet probe — mean pixel difference on a
+downscaled greyscale copy. Raw byte comparison would pass on caret blink and
+re-encoding noise alone, so every sign-in would record PASS whatever it typed.
+
+It records only what it can prove. A screen that moved shows the input landed;
+it does **not** show the credential was accepted, because a rejection repaints
+too — *"the password is incorrect"* is a repaint. Telling those apart by
+magnitude would be an uncalibrated threshold, so the note says so and points at
+the next capture. A screen that did not move at all records `BLOCKED`, not a
+finding: the keystrokes reached nothing, which is a fact about the console, not
+about the lab's credentials.
+
+Roles are resolved by `vault.role_of()`, which refuses a scope matching two
+roles or none: `Azure VM credentials` is genuinely both, and picking one would
+be a guess with a type signature.
+
 ## Why it stopped
 
 Every exit prints a sentence. Match its opening words here.
@@ -140,6 +176,7 @@ Every exit prints a sentence. Match its opening words here.
 | `2 model turns in a row outlasted the Ns budget` | the model could not answer twice running | raise `--turn-timeout` if the moves are simply long; the run is resumable with `auto --run <folder>` |
 | `all N selected sections are accounted for ... Separately, M were not selected` | a scoped walk finished its scope | expected; the report says `**Scoped run.**` and can never answer YES. Widen with `lab-validator scope --run <folder> --sections ...` and re-run `auto --run <folder>` |
 | `The lab has closed.` | the lab instance ended while the walk was still running | **not a tool failure and not a lab defect.** Sections already walked keep their reports; the rest are **unknown, not correct**. Launch the lab again and resume with `auto --run <folder>` |
+| `signin:<role> refused: ...` | the vault could not bind that login to exactly one credential pair | **not a guess to fix by retrying.** The message names what it found: no credential for that role, two that match, or half a pair. Check the Resources tab in `credentials.json`; if the lab genuinely issues an ambiguous scope, that is a finding about the lab |
 
 A **single** slow turn is not a stop. It prints `(that turn outlasted its Ns
 budget - timeout 1/2; anything it recorded is kept)` and the walk carries on:

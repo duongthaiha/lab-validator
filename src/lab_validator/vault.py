@@ -44,11 +44,51 @@ from pathlib import Path
 from .labclient import Credential
 from .runlog import utc_now
 
-__all__ = ["Vault", "VaultError", "classify"]
+__all__ = ["Vault", "VaultError", "classify", "ROLES", "role_of"]
 
 _GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 _URL = re.compile(r"^https?://", re.I)
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+#: Which sign-in a credential belongs to, keyed by words that appear in the
+#: *scope* the lab itself printed on its Resources tab.
+#:
+#: This table exists so that "which credential does this login want" stops being
+#: a judgement call. A lab commonly issues two username/password pairs -- one for
+#: the Windows machine, one for the cloud portal -- and they are not
+#: interchangeable. Asked to "sign in to the Azure portal" while looking at a
+#: Windows sign-in screen, a model reaches for the portal credential, because
+#: that is what the task is called. The password is rejected, the rejection looks
+#: like a broken lab, and the walk reports a defect that does not exist.
+#:
+#: Matching is on the scope the environment wrote, never on a name derived from
+#: the instructions -- the same rule the ask-matcher follows, for the same
+#: reason. A scope matching two roles, or none, is not resolved: see
+#: :func:`role_of`.
+ROLES: dict[str, tuple[str, ...]] = {
+    "vm": ("machine", "virtual machine", "vm", "rdp", "remote desktop", "computer", "windows"),
+    "portal": ("azure", "portal", "entra", "office", "microsoft 365", "m365", "tenant"),
+}
+
+#: Labels that identify the two halves of a sign-in, in preference order. A lab
+#: that calls it "User name" or "Login" is naming the same thing.
+ROLE_FIELDS: dict[str, tuple[str, ...]] = {
+    "username": ("username", "user name", "user", "login", "account", "email"),
+    "password": ("password", "pass", "pwd"),
+}
+
+
+def role_of(scope: str) -> str | None:
+    """Which sign-in this credential scope belongs to, or ``None``.
+
+    ``None`` covers two cases that must both refuse rather than resolve: a scope
+    naming no known role, and a scope naming more than one. "Azure VM
+    credentials" matches both tables, and picking either would be a guess with a
+    plausible-looking wrong answer.
+    """
+    lowered = scope.lower()
+    hits = {role for role, words in ROLES.items() if any(w in lowered for w in words)}
+    return hits.pop() if len(hits) == 1 else None
 
 #: Values below this length are words, not secrets, and masking them would
 #: corrupt ordinary prose in the trace. Mirrors ``runlog.Redactor``.
@@ -114,17 +154,93 @@ class Vault:
         because instructions name credentials loosely ("your Azure username")
         and an exact-only lookup fails on wording rather than on substance.
         """
+        exact, loose = self._pools(label, scope)
+        if exact:
+            return exact[0] if len(exact) == 1 else None
+        return loose[0] if len(loose) == 1 else None
+
+    def _pools(
+        self, label: str, scope: str | None = None
+    ) -> tuple[list[Credential], list[Credential]]:
+        """Every exact and every loose match, in capture order.
+
+        Split out so ambiguity is *visible* to the caller. The old lookup took
+        the first exact match and returned it, which meant a lab issuing both an
+        "Azure Portal / Password" and a "Machine credentials / Password"
+        resolved a bare ``password`` to whichever the Resources tab happened to
+        list first. That is selecting by position, and its wrong answer is
+        indistinguishable from its right one: a secret gets typed, the login
+        fails, and the failure reads as a defect in the lab.
+        """
         wanted = label.strip().lower()
         pool = [
             c
             for c in self.credentials
             if scope is None or scope.strip().lower() in c.scope.lower()
         ]
-        for c in pool:
-            if c.label.lower() == wanted:
-                return c
-        loose = [c for c in pool if wanted in c.label.lower()]
-        return loose[0] if len(loose) == 1 else None
+        return (
+            [c for c in pool if c.label.lower() == wanted],
+            [c for c in pool if wanted in c.label.lower()],
+        )
+
+    def candidates(self, label: str, scope: str | None = None) -> list[str]:
+        """The ``Scope/Label`` refs a loose lookup cannot choose between."""
+        exact, loose = self._pools(label, scope)
+        return [f"{c.scope}/{c.label}" for c in (exact or loose)]
+
+    # ---- sign-ins, bound mechanically -----------------------------------
+
+    def roles(self) -> dict[str, list[Credential]]:
+        """Every credential grouped by the sign-in it belongs to."""
+        out: dict[str, list[Credential]] = {}
+        for c in self.credentials:
+            if role := role_of(c.scope):
+                out.setdefault(role, []).append(c)
+        return out
+
+    def signin(self, role: str) -> tuple[Credential, Credential]:
+        """The username and password for one sign-in. Never a choice.
+
+        This is the whole point of the role table. A caller says *which login*
+        -- ``vm`` or ``portal`` -- and the pair comes back resolved from the
+        scope the lab printed. There is no parameter through which the wrong
+        credential can be requested, because deciding between two password rows
+        by reading a task title is precisely the mistake this prevents.
+
+        Raises rather than falling back. A sign-in with half a credential pair
+        types a username into a password box, and the login failure that follows
+        is indistinguishable from a lab whose credentials do not work.
+        """
+        if role not in ROLES:
+            raise VaultError(f"Unknown sign-in {role!r}. Known: {', '.join(sorted(ROLES))}")
+        pool = self.roles().get(role) or []
+        if not pool:
+            known = ", ".join(sorted(self.roles())) or "none"
+            raise VaultError(
+                f"This lab issued no {role!r} credentials. Scopes that did resolve: "
+                f"{known}. Everything handed out: {self.summary() or 'nothing'}"
+            )
+        found: dict[str, Credential] = {}
+        for field, words in ROLE_FIELDS.items():
+            for word in words:
+                hits = [c for c in pool if word in c.label.lower()]
+                if len(hits) == 1:
+                    found[field] = hits[0]
+                    break
+                if len(hits) > 1:
+                    raise VaultError(
+                        f"The {role!r} sign-in has {len(hits)} credentials matching "
+                        f"{field!r}: {', '.join(f'{c.scope}/{c.label}' for c in hits)}. "
+                        "Refusing to choose."
+                    )
+        missing = [f for f in ROLE_FIELDS if f not in found]
+        if missing:
+            have = ", ".join(f"{c.scope}/{c.label}" for c in pool)
+            raise VaultError(
+                f"The {role!r} sign-in is missing its {' and '.join(missing)}. "
+                f"That scope only carries: {have}"
+            )
+        return found["username"], found["password"]
 
     def value(self, ref: str) -> str:
         """Resolve ``"Scope/Label"`` or ``"Label"`` to the verbatim secret.
@@ -134,13 +250,30 @@ class Vault:
         box and then reports a login defect that is entirely its own.
         """
         scope, _, label = ref.rpartition("/")
+        # A role ref -- "vm/password", "portal/username" -- names the *sign-in*
+        # rather than the scope the lab happened to print, and resolves through
+        # the role table. Checked before the scope lookup and matched exactly,
+        # because "portal" is also a substring of "Azure Portal" and a ref that
+        # sometimes means the role and sometimes means the scope would be worse
+        # than either.
+        if scope.lower() in ROLES and label.lower() in ROLE_FIELDS:
+            username, password = self.signin(scope.lower())
+            return username.value if label.lower() == "username" else password.value
         match = self.find(label, scope or None)
-        if match is None:
+        if match is not None:
+            return match.value
+        rivals = self.candidates(label, scope or None)
+        if len(rivals) > 1:
             raise VaultError(
-                f"No credential {ref!r} was handed out by this lab. Available: "
-                + (self.summary() or "nothing -- the Resources tab was empty")
+                f"{ref!r} is ambiguous: this lab issued {len(rivals)} credentials "
+                f"labelled that way -- {', '.join(rivals)}. Name the scope. "
+                "Guessing types one secret into a box expecting the other, and "
+                "the rejection that follows reads as a defect in the lab."
             )
-        return match.value
+        raise VaultError(
+            f"No credential {ref!r} was handed out by this lab. Available: "
+            + (self.summary() or "nothing -- the Resources tab was empty")
+        )
 
     def has(self, ref: str) -> bool:
         scope, _, label = ref.rpartition("/")
@@ -174,14 +307,26 @@ class Vault:
         """
         return {f"{c.scope}/{c.label}": c.value for c in self.of_shape("url")}
 
-    def label_index(self) -> dict[str, str]:
-        """Lower-cased label -> ``Scope/Label`` reference.
+    def label_index(self) -> dict[str, tuple[str, ...]]:
+        """Lower-cased label -> **every** ``Scope/Label`` reference carrying it.
 
         The lookup table :func:`asks.asks_in` resolves against. It deliberately
         exposes **labels only**: deciding which credential an instruction wants
         must never require holding the secret, so the matcher never sees one.
+
+        A tuple, not a single ref, because labels are not unique and pretending
+        they are destroys the evidence of it. This was a dict comprehension
+        keyed on the label, so a lab handing out both an "Azure Portal /
+        Password" and a "Machine credentials / Password" silently kept one and
+        dropped the other -- last write wins, decided by the order of the
+        Resources tab. Two of the eight credentials in the reference workshop
+        were unreachable that way, and the two that survived were the wrong ones
+        for the first screen the learner meets.
         """
-        return {c.label.lower(): f"{c.scope}/{c.label}" for c in self.credentials}
+        index: dict[str, list[str]] = {}
+        for c in self.credentials:
+            index.setdefault(c.label.lower(), []).append(f"{c.scope}/{c.label}")
+        return {label: tuple(refs) for label, refs in index.items()}
 
     def asks_in(self, text: str):
         """Which lab-issued values this instruction text is asking for.

@@ -377,3 +377,38 @@ A finding is an argument. It needs:
 
 Length is not rigour, but neither is brevity. The test is whether the owner can
 act without asking you a question.
+
+## 20. When several things fit, the answer is which — not one of them
+
+An identifier that resolves to more than one thing has not resolved. Returning
+the first is not a lookup, it is a coin toss with a type signature, and its
+wrong answer is shaped exactly like its right one.
+
+Watch for the collapse happening *before* the ambiguity is visible. A mapping
+keyed on a name that is not unique does not report a conflict; it silently keeps
+one entry and discards the rest, and every layer downstream then behaves
+correctly on evidence that has already been destroyed. By the time a caller
+asks, there is nothing left to be ambiguous about.
+
+This matters most where the candidates are interchangeable in type and not in
+effect. Two passwords are both strings. Only one of them opens the thing in
+front of you, and using the other produces a rejection indistinguishable from a
+genuine fault in the system under test — so the wrong choice does not merely
+fail, it manufactures a false report about someone else's work.
+
+Three rules follow.
+
+**Refuse, and name the candidates.** A refusal that says *"ambiguous: A or B"*
+costs one round trip. A guess costs a false finding that someone must
+investigate and disprove.
+
+**Distinguish *unknown* from *ambiguous*.** "Nothing matched" is often a real
+defect in the thing being examined. "Several matched" is a limit of your own
+inference and must never be reported as a defect in anything.
+
+**Where a choice is mechanically determinable, do not offer it.** If the correct
+selection follows from context that code can see, bind it in code and give the
+caller a parameter that names the *purpose* instead of the *value*. Judgement
+should be spent on what cannot be derived. A caller that cannot express the
+wrong choice cannot make it — which is a stronger guarantee than any instruction
+telling it to be careful.

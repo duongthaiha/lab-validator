@@ -177,3 +177,94 @@ def test_runs_is_gitignored():
     """The whole secrets position rests on this one line, so assert it."""
     ignore = (Path(__file__).resolve().parents[1] / ".gitignore").read_text(encoding="utf-8")
     assert any(line.strip() == "runs/" for line in ignore.splitlines())
+
+
+# --- two sign-ins, two credential families ----------------------------------
+#
+# Every test below is here because a real walk typed the Azure password into a
+# Windows lock screen, thirteen times, and reported the lab as broken. The lab
+# was fine. Both families were captured correctly; the tool could not keep them
+# apart, and nothing about that failure was visible until a human watched it.
+
+TWO_SIGNINS = [
+    Credential("Azure Portal", "Username", "learner@labtenant.onmicrosoft.com"),
+    Credential("Azure Portal", "Password", "P0rtalSecret!23"),
+    Credential("Machine credentials", "Username", "Admin"),
+    Credential("Machine credentials", "Password", "M4chineSecret"),
+]
+
+
+def test_a_label_carried_by_two_scopes_keeps_both():
+    """The original defect. Two of eight credentials became unreachable.
+
+    ``label_index`` was a dict comprehension keyed on the label, so the second
+    "Password" overwrote the first and the survivor was decided by the order of
+    the Resources tab.
+    """
+    index = Vault.capture(TWO_SIGNINS).label_index()
+    assert index["password"] == ("Azure Portal/Password", "Machine credentials/Password")
+    assert index["username"] == ("Azure Portal/Username", "Machine credentials/Username")
+
+
+def test_an_unscoped_reference_to_a_duplicated_label_refuses():
+    """Returning the first match is selecting by position (principle 13)."""
+    with pytest.raises(VaultError, match="ambiguous"):
+        Vault.capture(TWO_SIGNINS).value("password")
+
+
+def test_the_ambiguity_refusal_names_both_candidates():
+    """A refusal that does not say what to type instead just stops the walk."""
+    with pytest.raises(VaultError) as exc:
+        Vault.capture(TWO_SIGNINS).value("password")
+    assert "Azure Portal/Password" in str(exc.value)
+    assert "Machine credentials/Password" in str(exc.value)
+
+
+def test_a_sign_in_resolves_to_its_own_scope_and_never_the_other():
+    """The property the whole role table exists for."""
+    vault = Vault.capture(TWO_SIGNINS)
+
+    vm_user, vm_pass = vault.signin("vm")
+    portal_user, portal_pass = vault.signin("portal")
+
+    assert (vm_user.value, vm_pass.value) == ("Admin", "M4chineSecret")
+    assert portal_pass.value == "P0rtalSecret!23"
+    assert vm_pass.value != portal_pass.value
+    assert portal_user.value.endswith("onmicrosoft.com")
+
+
+def test_a_role_reference_types_the_machine_password_not_the_portal_one():
+    """`vm/password` is the ref the agent uses; it must be unmistakable."""
+    vault = Vault.capture(TWO_SIGNINS)
+    assert vault.value("vm/password") == "M4chineSecret"
+    assert vault.value("portal/password") == "P0rtalSecret!23"
+    assert vault.value("vm/username") == "Admin"
+
+
+def test_a_scope_naming_two_roles_is_refused_rather_than_picked():
+    """"Azure VM credentials" is both. Choosing either would be a guess."""
+    from lab_validator.vault import role_of
+
+    assert role_of("Azure VM credentials") is None
+    assert role_of("Machine credentials") == "vm"
+    assert role_of("Azure Portal") == "portal"
+    assert role_of("Open AI Endpoint") is None
+
+
+def test_a_sign_in_the_lab_never_issued_refuses_and_says_what_it_did_issue():
+    vault = Vault.capture([Credential("Azure Portal", "Password", "P0rtalSecret!23")])
+    with pytest.raises(VaultError) as exc:
+        vault.signin("vm")
+    assert "portal" in str(exc.value)
+
+
+def test_half_a_credential_pair_refuses_rather_than_signing_in_with_one():
+    """A username typed into a password box fails exactly like a bad password."""
+    vault = Vault.capture([Credential("Machine credentials", "Password", "M4chineSecret")])
+    with pytest.raises(VaultError, match="missing its username"):
+        vault.signin("vm")
+
+
+def test_an_unknown_sign_in_names_the_ones_that_exist():
+    with pytest.raises(VaultError, match="Unknown sign-in"):
+        Vault.capture(TWO_SIGNINS).signin("database")

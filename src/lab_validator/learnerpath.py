@@ -150,6 +150,7 @@ ACTION_CAPABILITY: dict[str, str | None] = {
     "focus": "focus_vm",
     "type": "type",
     "cred": "type",
+    "signin": "type",
     "key": "key",
     "page": "goto_page",
     "read": "scroll_instructions",

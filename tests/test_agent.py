@@ -892,3 +892,79 @@ def test_the_closed_lab_stop_does_not_claim_the_lab_is_at_fault(tmp_path):
 
 async def _never_asked(move, shot):  # pragma: no cover - asserted not to run
     raise AssertionError("the model was consulted about a closed lab")
+
+
+# --- the credential the instructions never mention ---------------------------
+
+
+def test_the_prompt_lists_credentials_the_instruction_text_never_asks_for(tmp_path):
+    """The defect that made a real walk type an e-mail into a Windows lock box.
+
+    The reference workshop presents a locked VM before its first written step
+    and never mentions it in 109,703 characters. Told only about credentials the
+    *text* asked for, the model had never heard of the machine account, so it
+    reached for the portal one -- thirteen times -- and reported the lab broken.
+    """
+    from lab_validator.labclient import Credential
+    from lab_validator.vault import Vault
+
+    run, outline = _run(tmp_path)
+    Vault.capture([
+        Credential("Azure Portal", "Password", "P0rtalSecret!23"),
+        Credential("Machine credentials", "Password", "M4chineSecret"),
+    ]).save(run.dir)
+
+    text = agent.prompt_for(_first_move(run, outline), FakeTools(run))
+
+    assert "Machine credentials/Password" in text, (
+        "a credential the instructions never mention is invisible to the model "
+        "unless the prompt lists it"
+    )
+    assert "Azure Portal/Password" in text
+
+
+def test_the_prompt_never_carries_a_credential_value(tmp_path):
+    """The inventory is refs. A prompt is a transcript; secrets do not go in it."""
+    from lab_validator.labclient import Credential
+    from lab_validator.vault import Vault
+
+    run, outline = _run(tmp_path)
+    Vault.capture([Credential("Machine credentials", "Password", "M4chineSecret")]).save(run.dir)
+
+    text = agent.prompt_for(_first_move(run, outline), FakeTools(run))
+
+    assert "M4chineSecret" not in text
+
+
+def test_the_prompt_says_which_sign_in_each_credential_belongs_to(tmp_path):
+    """A flat list makes one password look like another.
+
+    Asserted against the *inventory line*, not the prompt as a whole. The first
+    version of this test looked for "signin:vm" anywhere in the text and passed
+    happily with the annotation removed, because the Rules block below mentions
+    both verbs. That is the third time in this project a guard has been
+    satisfied by a correct copy of the thing it was meant to be checking.
+    """
+    from lab_validator.labclient import Credential
+    from lab_validator.vault import Vault
+
+    run, outline = _run(tmp_path)
+    Vault.capture([
+        Credential("Azure Portal", "Password", "P0rtalSecret!23"),
+        Credential("Machine credentials", "Password", "M4chineSecret"),
+    ]).save(run.dir)
+
+    text = agent.prompt_for(_first_move(run, outline), FakeTools(run))
+    (line,) = [ln for ln in text.splitlines() if "Credentials this lab issued" in ln]
+
+    assert "Azure Portal/Password  [signin:portal]" in line
+    assert "Machine credentials/Password  [signin:vm]" in line
+
+
+def _first_move(run, outline):
+    from lab_validator.walkloop import next_move
+
+    run.start_segment("s01")
+    run.step("s01", action="read", note="scrolled", surface="labui",
+             capability="scroll_instructions")
+    return next_move(run, outline)

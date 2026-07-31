@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 import time
 from pathlib import Path
@@ -49,6 +50,7 @@ from lab_validator.labclient import (  # noqa: E402
 from lab_validator.learnerpath import Ledger
 from lab_validator.report import write_segment  # noqa: E402
 from lab_validator.runlog import DOMAINS, FINDING_VERDICTS, Run  # noqa: E402
+from lab_validator.vault import ROLE_FIELDS, Vault, VaultError  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
@@ -215,6 +217,113 @@ async def probe_connected(lab: LabClient, run: Run, segment: str, arg: str, budg
 PROBES = {"quiet": probe_quiet, "connected": probe_connected}
 
 
+async def resolve_credential(lab: LabClient, run: Run, ref: str) -> str:
+    """The value behind a credential ref, from the vault where there is one.
+
+    The vault is preferred over the live Resources tab for two reasons beyond
+    saving a tab switch. It is structured, so an ambiguous reference refuses
+    instead of resolving to whichever row the tab listed first; and it
+    understands *role* refs -- ``vm/password``, ``portal/username`` -- which name
+    the sign-in rather than the scope, and so cannot be aimed at the wrong one.
+
+    Falls back to reading the tab when a run has no vault, because a walk driven
+    step by step against a lab launched by hand is still a supported way to use
+    this, and it should degrade rather than stop.
+    """
+    with contextlib.suppress(Exception):
+        if vault := Vault.load(run.dir):
+            return vault.value(ref)
+    return await lab.credential_value(ref)
+
+
+async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
+    """Sign in to one thing, with the credential that thing issued.
+
+    ``signin:vm`` / ``signin:portal`` type that sign-in's **password**;
+    ``signin:portal/username`` types its username. The field is explicit because
+    sign-ins are multi-screen and the two screens look different: a Windows lock
+    screen arrives with the account already chosen and shows a password box
+    alone, while a portal asks for the account first. Typing a username into a
+    password box is a visible, harmless mistake; the field defaults to
+    ``password`` because that is the screen both flows share.
+
+    What is *not* a parameter is which credential to use. Every other action
+    here lets the caller say what to type; this one does not, and that asymmetry
+    is the entire point. A lab that hands out two username/password pairs -- one
+    for the Windows machine, one for the cloud portal -- has two logins that look
+    almost identical and share no credentials. Choosing between them by reading
+    the task name is how an Azure e-mail address ends up in a Windows password
+    box, and how the rejection that follows gets written up as a lab defect.
+
+    Records the outcome against the screen rather than the keystrokes: a frame
+    unchanged after a sign-in means the sign-in did not take, and saying so once
+    is better than retyping the same secret until a budget runs out.
+    """
+    role, _, field = arg.partition("/")
+    role, field = role.strip().lower(), (field.strip().lower() or "password")
+    if field not in ROLE_FIELDS:
+        raise Stop(f"signin field must be one of {sorted(ROLE_FIELDS)}, not {field!r}")
+
+    vault = Vault.load(run.dir)
+    if False:
+        raise Stop(
+            f"signin:{arg} needs the credentials this lab issued, and this run "
+            "captured none. Launch through `lab-validator walk` so the Resources "
+            "tab is read at launch, or type the fields with cred: refs."
+        )
+    try:
+        username, password = vault.signin(role)
+    except VaultError as exc:
+        raise Stop(f"signin:{arg} refused: {exc}") from exc
+
+    for cred in (username, password):
+        run.redactor.add(cred.value, f"{role}-{cred.label}".lower())
+    chosen = username if field == "username" else password
+
+    before = await lab.screen_bytes()
+    await lab.type(chosen.value)
+    await lab.key("Enter")
+    await asyncio.sleep(6)
+    after = await lab.screen_bytes()
+
+    # Byte equality is the obvious test and `imaging.stability` exists because it
+    # is wrong here: the console re-encodes its framebuffer and a caret blinks,
+    # so two identical screens almost never compare equal and every sign-in
+    # would record PASS whatever it typed.
+    delta = stability(before, after)
+    landed = delta > QUIET_THRESHOLD
+
+    # What this can and cannot prove. A screen that moved shows the keystrokes
+    # reached something; it does NOT show the credential was accepted, because a
+    # rejection also repaints -- that is what "the password is incorrect" is.
+    # Separating those two by magnitude would be a threshold nobody calibrated,
+    # so the verdict claims only the part that is established and the note says
+    # where the rest gets settled: the next capture.
+    # `severity=None`, not `""`: BLOCKED carries no severity and `run.step`
+    # validates the value. An empty string reads as "no severity" and is
+    # rejected -- which the first draft of this function did on its PASS path.
+    run.step(
+        segment,
+        action=f"signin:{role}/{field}",
+        surface="vm",
+        verdict="PASS" if landed else "BLOCKED",
+        severity=None,
+        note=(
+            f"{chosen.scope}/{chosen.label}; "
+            + (
+                f"screen moved (delta {delta:.1f}) -- input landed; whether it was "
+                "accepted is not established here, read the next capture"
+                if landed
+                else f"screen unchanged (delta {delta:.1f}) after 6s -- the "
+                "keystrokes reached nothing. Not a credential defect: check the "
+                "console is live and the field focused before concluding anything "
+                "about the lab"
+            )
+        ),
+    )
+    return 0
+
+
 async def run_actions(
     lab: LabClient, run: Run, segment: str, label: str, actions: list[str],
     ledger: Ledger | None = None,
@@ -255,10 +364,14 @@ async def run_actions(
             run.step(segment, action=f"type:{arg}", surface="vm")
 
         elif verb == "cred":
-            value = await lab.credential_value(arg)
+            value = await resolve_credential(lab, run, arg)
             run.redactor.add(value, arg.replace("/", "-").lower())
             await lab.type(value)
             run.step(segment, action=f"cred:{arg}", surface="vm", note=f"{len(value)} chars")
+
+        elif verb == "signin":
+            n = await do_signin(lab, run, segment, arg.strip().lower())
+            findings += n
 
         elif verb == "key":
             keys = [k.strip() for k in arg.split("+")] if "+" not in arg else [arg]

@@ -1582,7 +1582,186 @@ eighth defect and a serious one. Nothing in the trace settles it, which is
 itself worth recording: *the run did not capture what it would need to answer
 the first question anybody asks about it.*
 
-## 3. Recommended architecture
+### 2.23 One label, two secrets: the wrong password, thirteen times
+
+The second live run got further than the first and then stuck. The operator's
+report was four words long: *"it keeps typing the wrong password for the VM."*
+
+The evidence made the diagnosis quick and the diagnosis was not what the symptom
+suggested. All twenty screenshots in the run are the same Windows lock screen --
+93.6-94.4% flat `rgb(8,64,112)`, 133-199 distinct colours after quantisation.
+The walk never reached a desktop. Yet the captures are labelled `portal-nav`,
+`portal-loaded`, `start-menu`, `taskbar-click` and `click-email-field`. **The
+model narrated a desktop it never saw**, one screenshot at a time, and typed a
+42-character e-mail address into a box that wanted a 9-character machine
+password.
+
+#### The lab was fine
+
+The Resources tab had issued eight credentials in three scopes:
+
+| Scope | Rows |
+| --- | --- |
+| `Azure Portal` | URL, Subscription, Username (42 ch), Password (12 ch), TAP |
+| `Open AI Endpoint` | Name |
+| `Machine credentials` | Username (5 ch, `Admin`), Password (9 ch) |
+
+Everything needed was captured, correctly, at launch. Three separate things then
+conspired to make it unreachable.
+
+#### One: a dict comprehension threw two credentials away
+
+```python
+return {c.label.lower(): f"{c.scope}/{c.label}" for c in self.credentials}
+```
+
+Labels are not unique. Two scopes carried `Username` and two carried `Password`,
+so eight credentials became six index entries and **two were unreachable** --
+decided by nothing more principled than the order of rows on the Resources tab.
+Reverse that order and the *other* two vanish.
+
+This is the fourth appearance in this project of the same mistake: selecting by
+position where identity was required. It is worth noting what made this instance
+harder to see than the others. The loose-match path immediately below it already
+had the discipline right --
+
+```python
+loose = [c for c in pool if wanted in c.label.lower()]
+return loose[0] if len(loose) == 1 else None
+```
+
+-- so the file contained both the bug and its own fix, four lines apart. A
+partial-match reference refused ambiguity correctly; an exact one resolved it by
+luck.
+
+#### Two: the failure had no shape
+
+`Vault.find` returned the first exact match. `asks._match` returned the first
+label containing the needle. Neither could see the collision because
+`label_index` had already destroyed the evidence of it. Three layers, each
+reasonable in isolation, each removing information the next one needed.
+
+#### Three: the model was never told the credentials existed
+
+This is the one that actually caused the wrong password, and it is not an
+ambiguity bug at all. The prompt listed only credentials that the *instruction
+text* had asked for. The section's tasks read "1. Sign in to Azure Portal", so
+the portal credentials were named and the machine credentials were not
+mentioned anywhere -- not in the prompt, and not in the lab either.
+
+**The workshop never documents the VM sign-in.** 109,703 characters of
+instructions, and the locked Windows desktop that greets every learner before
+step one appears in none of them. A human does not notice: they see `Admin`,
+glance at the Resources tab, find `Machine credentials`, and move on in two
+seconds without registering it as an undocumented step. A model that has been
+told about exactly one credential family reaches for that family.
+
+So the model behaved sensibly given what it knew, and what it knew was wrong.
+
+#### The fix: stop asking the model to choose
+
+The tempting fix is a better prompt -- *"be careful which password you use"*.
+That converts a mechanical error into a probabilistic one, which is worse,
+because it will now be wrong rarely and unpredictably instead of consistently.
+
+Credentials are bound to sign-ins by a table:
+
+```python
+ROLES = {
+    "vm":     ("machine", "virtual machine", "vm", "rdp", "remote desktop", ...),
+    "portal": ("azure", "portal", "entra", "office", "microsoft 365", ...),
+}
+```
+
+and the walk gains a `signin:` verb that takes a **role**, never a credential:
+
+```
+signin:vm                 -> the machine password
+signin:portal             -> the cloud password
+signin:portal/username    -> the cloud account
+```
+
+Every other action in `lab_step.py` lets the caller say what to type. This one
+does not, and the asymmetry is the whole design. The model still decides *which
+sign-in it is looking at* -- that is judgement, it has the screenshot, and it is
+good at it -- but it can no longer express "type the Azure password into the VM
+login", because the action has no slot for it. Same division as everywhere else
+in `auto`: the model supplies judgement, Python keeps the mechanism.
+
+A scope matching two roles, or none, resolves to neither. "Azure VM
+credentials" is genuinely both, and picking one would be a guess wearing a
+type signature.
+
+#### What we did not build, and why
+
+The obvious-looking answer was a lock-screen detector: the Windows sign-in
+screen is a flat solid colour, so a few lines of Pillow should separate it from
+a desktop. The measurement says otherwise. Against 1,012 desktop captures the
+populations **overlap** -- and the frames that overlap most are the ones that
+matter:
+
+| | dominant colour | distinct colours |
+| --- | --- | --- |
+| Lock screen (n=20) | 93.6-94.4% | 133-199 |
+| Everything else (n=1012) | 6.9-97.8% | 85-2699 |
+
+The flattest "desktop" frame in the corpus is 97.8% uniform with 85 colours --
+*flatter than any lock screen* -- and it turns out to be the post-sign-in
+**"Welcome"** screen: same blue, same avatar, no password box. A detector tuned
+to the lock screen fires on the screen that means *the sign-in already worked*.
+
+That is the useful negative result. Colour statistics can tell you the VM is
+showing a sign-in *surface*; they cannot tell you whether it is asking for a
+password or telling you it is done. Deciding on the strength of that would have
+been a heuristic that is right most of the time -- and principle 13 exists
+because that is worse than a refusal.
+
+#### Lessons
+
+**A guard can pass because a correct copy exists elsewhere.** Third occurrence.
+The test asserting the prompt says which sign-in each credential serves looked
+for `signin:vm` anywhere in the text, and passed with the annotation deleted,
+because the Rules block below mentions the verb. Mutation testing found it; the
+rewritten guard asserts against the inventory *line*.
+
+**Fixing a silent collapse can create a louder one.** Changing `label_index` to
+return tuples meant a stale caller passing the old flat mapping had its strings
+iterated character by character, producing
+`username -> AMBIGUOUS, could be any of: c, r, e, d, -, 1`. Every fragment of
+that looks like a working reference. The suite caught it in seconds, and the
+type check that now refuses a bare string is there because a wrong answer in the
+shape of a right one is this project's recurring enemy, including when it is
+ours.
+
+**A screenshot is not a report.** The walk labelled twenty identical lock
+screens as portal navigation. Nothing in the pipeline compared consecutive
+frames, so a step that changed nothing recorded PASS. `signin:` now records its
+verdict against the frame -- unchanged screen, unchanged verdict -- rather than
+against the keystrokes it sent, which is the same lesson as 2.22 applied one
+level down: *do not believe you did something because you asked for it.*
+
+**And the first version of that check made the mistake it was fixing.** It
+compared raw JPEG bytes. Thirty lines away, `imaging.stability` opens with
+*"Byte equality is the obvious test and it is wrong here"* -- the project had
+already paid for this lesson, written it down, and calibrated a threshold for
+it. On a live console the caret alone moves the bytes every second, so the
+guard against believing the keystrokes would itself have returned PASS
+unconditionally. The fix reuses `stability`. The general point is not about
+images: **when you add a check, look for the check the codebase already made
+for the same question**, because a second implementation of an answered
+question inherits none of what the first one learned.
+
+**Prove the part you can prove, and say where the rest gets settled.** The
+tempting verdict for a moved screen is "signed in". It is not available: a
+rejection repaints too, and separating a rejection from a success by the
+*magnitude* of the repaint is the same uncalibrated threshold that the
+lock-screen detector was rejected for. So a moved screen records that the input
+landed and names the next capture as the place the question is answered, and a
+screen that did not move at all records `BLOCKED` rather than a finding --
+keystrokes reaching nothing is a fact about the console, not evidence against
+the lab's credentials. Filing that as `LAB007 major` was the first draft, and it
+would have been §2.22's dead-pane finding all over again: a real observation,
+correctly made, attributed to the wrong thing.## 3. Recommended architecture
 ### 3.1 The control-surface ladder
 
 Always take the highest rung that can answer the question. Every rung down costs an order of

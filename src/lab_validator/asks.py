@@ -80,26 +80,44 @@ _SENTENCE = re.compile(r"[^.!?\n]+[.!?]?")
 class Ask:
     """One request for a lab-issued value, found in one sentence.
 
-    ``ref`` is the vault reference to type, or ``None`` when the environment
-    never issued anything matching -- which is the finding, not an error.
+    ``ref`` is the vault reference to type. It is ``None`` in two very different
+    situations, and collapsing them would be a bug in its own right:
+
+    * **unsatisfied** -- the environment never issued anything matching. That is
+      a finding about the lab.
+    * **ambiguous** -- it issued several and the sentence does not say which.
+      That is a limit of what can be inferred, not a defect, and it must never
+      be reported as one.
     """
 
     term: str
     sentence: str
     ref: str | None = None
     label: str | None = None
+    candidates: tuple[str, ...] = ()
 
     @property
     def satisfied(self) -> bool:
         return self.ref is not None
 
+    @property
+    def ambiguous(self) -> bool:
+        """Several credentials fit and nothing in the text chooses between them."""
+        return self.ref is None and len(self.candidates) > 1
+
     def action(self) -> str | None:
-        """The ``--do`` action that answers this ask, if it can be answered."""
+        """The ``--do`` action that answers this ask, if it can be answered.
+
+        ``None`` when ambiguous, so nothing is typed. Picking one would satisfy
+        this method's signature and defeat its purpose.
+        """
         return f"cred:{self.ref}" if self.ref else None
 
     def __str__(self) -> str:
         if self.satisfied:
             return f"{self.term} -> {self.ref}"
+        if self.ambiguous:
+            return f"{self.term} -> AMBIGUOUS, could be any of: {', '.join(self.candidates)}"
         return f"{self.term} -> NOT ISSUED by this lab"
 
 
@@ -107,33 +125,52 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE.findall(text) if s.strip()]
 
 
-def _match(term: str, labels: dict[str, str]) -> tuple[str, str] | None:
-    """Resolve an instruction's word for a value to an actual captured row.
+def _match(term: str, labels: dict[str, tuple[str, ...]]) -> tuple[tuple[str, ...], str] | None:
+    """Resolve an instruction's word for a value to the actual captured rows.
 
     Matches on the *label the environment used*, never on a name derived from
     the instruction. The lab calls it "Subscription ID"; the text may call it
     "your subscription"; the mapping between the two is the whole job, and
     guessing it is how you type the wrong secret into the wrong box.
+
+    Returns **every** candidate, so the caller can tell one from several. A
+    single label can be carried by more than one credential -- a lab with an
+    Azure password and a machine password has two rows labelled "Password" --
+    and returning the first is how the wrong one gets typed.
     """
     for needle in TERMS[term]:
-        for lowered, ref in labels.items():
+        hits: list[str] = []
+        label = ""
+        for lowered, refs in labels.items():
             if needle in lowered:
-                return ref, lowered
+                hits.extend(refs)
+                label = label or lowered
+        if hits:
+            return tuple(hits), label
     return None
 
 
-def asks_in(text: str, labels: dict[str, str] | None = None) -> list[Ask]:
+def asks_in(text: str, labels: dict[str, tuple[str, ...]] | None = None) -> list[Ask]:
     """Every request for a lab-issued value in ``text``.
 
-    ``labels`` maps a lower-cased credential label to its vault reference; pass
-    :meth:`Vault.label_index`. With no labels every ask comes back unsatisfied,
-    which is the honest answer -- nothing was captured, so nothing can be
-    supplied -- rather than an empty list implying nothing was asked for.
+    ``labels`` maps a lower-cased credential label to **every** vault reference
+    carrying it; pass :meth:`Vault.label_index`. With no labels every ask comes
+    back unsatisfied, which is the honest answer -- nothing was captured, so
+    nothing can be supplied -- rather than an empty list implying nothing was
+    asked for.
 
     Duplicates collapse per term, because a section that says "enter the
     password" four times wants one password, not four.
     """
     labels = labels or {}
+    for lowered, refs in labels.items():
+        if isinstance(refs, str):
+            raise TypeError(
+                f"labels[{lowered!r}] is a string. This mapping takes every ref "
+                "carrying a label, as a tuple -- pass Vault.label_index(). A "
+                "bare string iterates character by character and resolves to "
+                "nonsense that still looks like a credential reference."
+            )
     found: dict[str, Ask] = {}
 
     for sentence in _sentences(text):
@@ -154,10 +191,12 @@ def asks_in(text: str, labels: dict[str, str] | None = None) -> list[Ask]:
                 if term in found:
                     continue
                 match = _match(term, labels)
+                refs = match[0] if match else ()
                 found[term] = Ask(
                     term=term,
                     sentence=sentence,
-                    ref=match[0] if match else None,
+                    ref=refs[0] if len(refs) == 1 else None,
                     label=match[1] if match else None,
+                    candidates=refs,
                 )
     return list(found.values())

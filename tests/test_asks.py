@@ -16,11 +16,11 @@ from lab_validator.labclient import Credential
 from lab_validator.vault import Vault
 
 LABELS = {
-    "username": "Azure/Username",
-    "password": "Azure/Password",
-    "subscription id": "Azure/Subscription ID",
-    "resource group": "Azure/Resource Group",
-    "endpoint": "Azure/Endpoint",
+    "username": ("Azure/Username",),
+    "password": ("Azure/Password",),
+    "subscription id": ("Azure/Subscription ID",),
+    "resource group": ("Azure/Resource Group",),
+    "endpoint": ("Azure/Endpoint",),
 }
 
 
@@ -134,7 +134,7 @@ def test_asking_for_a_value_the_lab_never_issued_is_unsatisfied_not_silent():
     This is the machine-readable version of that.
     """
     (ask,) = asks_in("Copy the resource group from the Resources tab.",
-                     {"username": "Azure/Username"})
+                     {"username": ("Azure/Username",)})
     assert ask.term == "resource group"
     assert not ask.satisfied
     assert ask.ref is None
@@ -177,7 +177,7 @@ def test_the_label_index_exposes_labels_and_never_values():
         Credential(scope="Azure", label="Password", value="Sup3rSecret!value"),
     ])
     index = vault.label_index()
-    assert index == {"password": "Azure/Password"}
+    assert index == {"password": ("Azure/Password",)}
 
 
 def test_matching_is_on_the_label_the_environment_used():
@@ -195,3 +195,44 @@ def test_an_ask_is_hashable_and_comparable_so_it_can_be_deduped_by_callers():
     b = Ask(term="password", sentence="Enter the password.", ref="Azure/Password")
     assert a == b
     assert len({a, b}) == 1
+
+
+# --- one label, two credentials ---------------------------------------------
+
+
+def test_an_ask_that_two_credentials_fit_types_nothing():
+    """Ambiguity must not resolve. Typing either is a coin toss with a secret."""
+    vault = Vault.capture([
+        Credential(scope="Azure Portal", label="Password", value="P0rtalSecret!23"),
+        Credential(scope="Machine credentials", label="Password", value="M4chineSecret"),
+    ])
+    (ask,) = vault.asks_in("Enter the password from the Resources tab.")
+
+    assert ask.ambiguous
+    assert not ask.satisfied
+    assert ask.action() is None, "an ambiguous ask must produce no keystrokes"
+
+
+def test_an_ambiguous_ask_is_not_reported_as_a_missing_credential():
+    """Two different facts. One is a lab defect; the other is our own limit."""
+    vault = Vault.capture([
+        Credential(scope="Azure Portal", label="Password", value="P0rtalSecret!23"),
+        Credential(scope="Machine credentials", label="Password", value="M4chineSecret"),
+    ])
+    (ask,) = vault.asks_in("Enter the password from the Resources tab.")
+
+    assert "NOT ISSUED" not in str(ask)
+    assert "AMBIGUOUS" in str(ask)
+    assert "Azure Portal/Password" in str(ask)
+    assert "Machine credentials/Password" in str(ask)
+
+
+def test_the_old_flat_mapping_is_refused_rather_than_iterated():
+    """A bare string iterates per character and resolves to plausible nonsense.
+
+    Found by running the suite mid-change: a stale caller produced the ask
+    ``username -> AMBIGUOUS, could be any of: c, r, e, d, -, 1``. Every part of
+    that looks like a working reference.
+    """
+    with pytest.raises(TypeError, match="is a string"):
+        asks_in("Enter the password.", {"password": "Azure/Password"})

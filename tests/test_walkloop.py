@@ -568,7 +568,7 @@ def test_the_move_names_the_credential_the_next_task_wants(tmp_path):
     run.start_segment("s00")
     scrolled(run, "s00")
 
-    move = next_move(run, outline_with_credential_task(), labels={"username": "cred-1"})
+    move = next_move(run, outline_with_credential_task(), labels={"username": ("cred-1",)})
 
     assert move.detail["asks"]["task-1"] == ["username -> cred-1"]
     assert move.detail["unsatisfiedAsks"] == []
@@ -579,7 +579,7 @@ def test_an_ask_the_lab_never_issued_is_reported_not_swallowed(tmp_path):
     run.start_segment("s00")
     scrolled(run, "s00")
 
-    move = next_move(run, outline_with_credential_task(), labels={"password": "cred-9"})
+    move = next_move(run, outline_with_credential_task(), labels={"password": ("cred-9",)})
 
     assert move.detail["unsatisfiedAsks"] == ["username"]
     assert "did not issue" in move.why, (
@@ -633,7 +633,7 @@ def test_prose_that_asks_for_nothing_produces_no_asks(tmp_path):
     run.start_segment("s00")
     scrolled(run, "s00")
 
-    move = next_move(run, make_outline(), labels={"username": "cred-1"})
+    move = next_move(run, make_outline(), labels={"username": ("cred-1",)})
 
     assert move.detail["asks"] == {}
     assert "did not issue" not in move.why
