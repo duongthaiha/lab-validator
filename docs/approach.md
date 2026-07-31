@@ -796,10 +796,65 @@ Two consequences worth stating, because they are where the value actually lands:
   attempt at the pairing, where I had claimed clicking the Instructions *tab* covered the
   *pager*. It does not. Switching to a pane is not reading it.
 
----
+  ### 2.17 The unit of coverage is the task, not the section
 
-## 3. Recommended architecture
+  The walk loop packages the one part of a hand-driven walk that is genuinely
+  mechanical: deciding what comes next and refusing to advance past work nobody
+  did. Everything else — what the instruction means, whether the screen matches
+  it, which side is at fault — needs judgement and stays with the agent.
 
+  Two design choices carry the whole module.
+
+  **It is a pure function of the run folder.** `next_move(run, outline)` reads
+  persisted state and nothing else, so resuming a killed walk is the same call as
+  continuing a live one. That is not tidiness; a multi-hour unattended walk *will*
+  be interrupted, and a loop whose position lives in a Python variable cannot
+  survive it. The side benefit is that the whole state machine is testable without
+  a browser, including a drive-to-exhaustion test that proves it cannot spin — a
+  loop that returns the same move forever would hang an unattended run with no
+  error and no output, which is the least debuggable failure there is.
+
+  **Progress is counted in tasks, not sections.** A section is a heading; a task
+  is a thing the instructions told a learner to do. The failure mode of the
+  reference walk was a task quietly skipped inside a section that then reported
+  clean, and only task-level bookkeeping can see that. So a step must name the
+  task it answers, and a section reference is explicitly *not* accepted as
+  coverage — one would vouch for every task under it, restoring the exact hole.
+
+  Pointing the finished loop at the reference run is what made this concrete. All
+  23 sections read `done`; 8 of them contain 35 numbered tasks that **no step ever
+  named**. That is not an accusation that the tasks were skipped — 6 328 steps and
+  81 findings say otherwise — it is the sharper and more useful claim that *the
+  evidence cannot show they were judged*. A run that says "complete" while 35
+  tasks are unaccounted for is exactly the report that should not read clean, and
+  the loop now appends that count to its final sentence.
+
+  Three smaller decisions, each of which exists because the naive version is
+  silently wrong:
+
+  - **"No tasks" and "could not find the tasks" are different answers.** Both
+    yield an empty list, and collapsing them reproduces the bug the corpus parser
+    already warns about: an unresolvable anchor "looks like *nothing to check*
+    instead of *could not resolve*". `coverage_kind()` returns `enumerated`,
+    `no-tasks` or `unresolved`, and the unresolved case shouts.
+  - **Blocked keeps reading.** A blocker is the *first* finding in a section, not
+    the last, so the loop switches from `perform` to `assess` — judge what the
+    text alone can settle — rather than ending the section on it. §2.11, enforced
+    rather than remembered.
+  - **The clock outranks work that is ready to do.** Stopping mid-section leaves
+    it unreported, so the loop stops with `RESERVE_MINUTES` still on the lab
+    clock. Stopping early with a complete deliverable beats stopping late with a
+    folder somebody has to reconstruct by hand.
+
+  Finally, the livelock. Under a task-level rule, a caller that keeps passing
+  section anchors gets asked for the same tasks forever, with no error. Real risk:
+  the reference run recorded 394 references and *every one* named a section. The
+  loop cannot relax the rule, so instead it detects the mis-scoping and names the
+  fix in the same sentence it asks the question.
+
+  ---
+
+  ## 3. Recommended architecture
 ### 3.1 The control-surface ladder
 
 Always take the highest rung that can answer the question. Every rung down costs an order of

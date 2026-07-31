@@ -43,10 +43,20 @@ def invocations() -> list[str]:
 
 
 def flags_of(command: str) -> set[str]:
-    """The real long options a sub-command accepts."""
-    if command == "walk":
-        return {"--url", "--name", "--agent", "--signin-budget",
-                "--launch-budget", "--client-budget", "--port", "--help"}
+    """The real long options a sub-command accepts.
+
+    Scraped rather than listed. A hand-kept copy of a flag list is a second
+    source of truth that goes stale silently, and this test exists precisely to
+    catch documentation drifting from code — it should not be the thing drifting.
+    """
+    if command in cli.BUILTINS:
+        src = Path(cli.__file__).read_text(encoding="utf-8")
+        # main() builds each built-in's parser inside its own dispatch block.
+        blocks = src.split('if args.command == "')
+        block = next((b for b in blocks if b.startswith(f'{command}"')), None)
+        assert block is not None, f"no dispatch block for built-in {command!r}"
+        block = block.split("return ", 1)[0]
+        return set(re.findall(r'add_argument\(\s*"(--[a-z][a-z0-9-]*)"', block)) | {"--help"}
     module = cli._load(cli.COMMANDS[command][0])
     src = (cli.SCRIPTS / cli.COMMANDS[command][0]).read_text(encoding="utf-8")
     assert module is not None
@@ -62,7 +72,7 @@ def test_the_skill_contains_commands_at_all():
 @pytest.mark.parametrize("line", invocations())
 def test_every_documented_command_exists(line):
     command = line.split()[0]
-    assert command == "walk" or command in cli.COMMANDS, (
+    assert command in cli.BUILTINS or command in cli.COMMANDS, (
         f"the skill documents `lab-validator {command}`, which is not a command"
     )
 

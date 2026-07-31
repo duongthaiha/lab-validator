@@ -41,6 +41,17 @@ COMMANDS = {
 }
 
 
+#: sub-commands implemented here rather than delegated to a script. Kept as data
+#: because three places need the list — the help epilog, the dispatcher's error
+#: path, and the test that checks the skill only documents real commands — and a
+#: hardcoded copy in any of them silently rots the moment a command is added.
+BUILTINS = {
+    "walk": "start a run from a lab URL (the human signs in)",
+    "next": "what the walk loop says to do now, and why",
+    "install-skill": "copy skills/lab-validator into ~/.copilot/skills",
+}
+
+
 def _load(script: str):
     """Import a script by path so the dispatcher does not duplicate its logic.
 
@@ -270,6 +281,48 @@ def cmd_install_skill(args) -> int:
     return 0
 
 
+# ---- next: what the loop says to do now ----------------------------------
+
+
+def cmd_next(args) -> int:
+    """Print the next move, decided from the run folder alone.
+
+    This is the walk loop's whole interface. It is a separate command rather
+    than a daemon because the step it decides needs judgement to carry out, and
+    judgement is the one part that cannot be packaged. Deciding *what* comes
+    next, and refusing to advance past a task nobody judged, can be.
+    """
+    from .corpus import Outline
+    from .runlog import Run
+    from .walkloop import describe, next_move
+
+    runs_root = Path(args.runs or "runs")
+    run = Run.open(Path(args.run)) if args.run else Run.latest(runs_root)
+    if run is None:
+        print(f"no run found under {runs_root}", file=sys.stderr)
+        return 2
+
+    outline = None
+    corpus = (run.manifest.get("corpus") or {}).get("outline")
+    for candidate in ([Path(corpus)] if corpus else []) + [run.dir / "outline.json"]:
+        if candidate.exists():
+            outline = Outline.load(candidate)
+            break
+    if outline is None:
+        print("note: no corpus outline found, so task coverage cannot be checked")
+
+    move = next_move(run, outline, minutes_remaining=args.minutes)
+    print(describe(run, outline))
+    print()
+    print(f"NEXT: {move.action.upper()}" + (f"  [{move.segment_id}]" if move.segment_id else ""))
+    print(f"  why: {move.why}")
+    for ref in move.tasks:
+        print(f"  task: #{ref}")
+    if move.detail:
+        print(f"  {move.detail}")
+    return 0
+
+
 # ---- entry point ---------------------------------------------------------
 
 
@@ -301,13 +354,13 @@ def main() -> int:
         description="Walk a Skillable lab as a learner and report where it has drifted.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="\n".join(
-            ["commands:",
-             "  walk     start a run from a lab URL (the human signs in)",
-             "  install-skill  copy skills/lab-validator into ~/.copilot/skills"]
-            + [f"  {name:<9}{help}" for name, (_, help) in COMMANDS.items()]
+            ["commands:"]
+            + [f"  {name:<14}{help}" for name, help in BUILTINS.items()]
+            + [f"  {name:<14}{help}" for name, (_, help) in COMMANDS.items()]
         ),
     )
-    parser.add_argument("command", nargs="?", help="walk, or one of: " + ", ".join(COMMANDS))
+    parser.add_argument("command", nargs="?",
+                        help="one of: " + ", ".join([*BUILTINS, *COMMANDS]))
     parser.add_argument("rest", nargs=argparse.REMAINDER)
     args, _ = parser.parse_known_args()
 
@@ -330,6 +383,14 @@ def main() -> int:
                        help="seconds to wait for the lab client to answer")
         w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
         return cmd_walk(w.parse_args(args.rest))
+
+    if args.command == "next":
+        n = argparse.ArgumentParser(prog="lab-validator next")
+        n.add_argument("--run", help="run folder (default: the most recent)")
+        n.add_argument("--runs", help="runs root (default: ./runs)")
+        n.add_argument("--minutes", type=int,
+                       help="lab minutes remaining, so the loop can reserve write-up time")
+        return cmd_next(n.parse_args(args.rest))
 
     if args.command == "install-skill":
         s = argparse.ArgumentParser(prog="lab-validator install-skill")

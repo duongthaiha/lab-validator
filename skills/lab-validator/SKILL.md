@@ -86,10 +86,16 @@ config that disagrees with what the Resources tab just issued.
 ## Step 4 — Read what the lab actually asks for, before doing anything
 
 ```powershell
+lab-validator next                            # what to do now, and why
 lab-validator run --next                      # the next unwalked section
 lab-validator text --segment s04 --tasks      # the numbered tasks in it
 lab-validator text --segment s04              # the full text
 ```
+
+`next` is the loop. Ask it after every step; it reads the run folder and nothing
+else, so it is also how you resume a walk that was interrupted. It will not let
+you advance past a task nobody judged, and when it stops it tells you what is
+still unaccounted for.
 
 Read the whole section first. Do **not** work from the task list alone —
 prerequisites, warnings and "if you see X, do Y" notes live in the prose, and
@@ -137,12 +143,18 @@ produce. The most dangerous lab defects are steps that *succeed while failing*.
 ```powershell
 lab-validator step --segment s04 --label task2-deploy --verdict LAB001 `
   --domain setup --severity critical `
-  --ref "#deploy-models" `
+  --ref "#2-deploy-gpt-4o-model" `
   --note "Task 2 says 'leave the defaults and click Deploy'. Deployment is refused: 'ServiceModelDeprecating ... cannot be used for new deployments'. Third independent observation, on a fresh lab instance and a new subscription, so this is not a stale environment."
 ```
 
 `--ref` anchors the finding to the instruction it disputes, so a reader can go
 straight to the text in question.
+
+**Use the task's own anchor, not the section's.** Coverage is counted per task,
+and a section reference is refused — one would vouch for every task under it,
+which is how a section reports clean with a task nobody did. `lab-validator
+text --segment s04 --tasks` prints the anchors. If you keep being asked for
+tasks you believe you did, this is why, and `next` will say so.
 
 Every finding needs three things (see `references/judgement.md`):
 
