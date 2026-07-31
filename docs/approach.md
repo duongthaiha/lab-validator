@@ -933,6 +933,30 @@ Two consequences worth stating, because they are where the value actually lands:
   timeout. A timeout message that describes the wrong problem sends the reader to
   look at provisioning for fifteen minutes.
 
+  A third instance of the same shape turned up in the walk loop itself, found by
+  driving the finished CLI rather than by reading it: `_report_written` asked
+  whether `sections/<id>.md` **exists**. Existence is not currency. A report
+  written before the last three findings passes that test, so a section could
+  advance carrying a report that reads clean while the trace beside it holds a
+  defect nobody rendered — and because the run then looks complete, nothing later
+  ever re-reads it. The fix is the same move as the corpus hash: record *how far
+  through the trace the report was written from* (`reported_through`), and treat
+  a report older than the section's last step as absent. Findings recorded after
+  a report reopen it.
+
+  The compatibility clause matters as much as the check. A run folder with no
+  `reported_through` is trusted rather than forced to re-report, because run
+  folders are evidence and outlive the code that wrote them: demanding a rewrite
+  of a sealed run to satisfy a newer bookkeeping field would corrupt the thing
+  the field exists to protect.
+
+  **Three of these in one hardening pass is a pattern, not three coincidences.**
+  Every one was a *selection by position or presence* rather than by identity —
+  first tab, shared file, file exists — and not one could fail loudly. That is
+  the family resemblance worth remembering: the dangerous bugs in a validator are
+  not the ones that crash, they are the ones that answer confidently about the
+  wrong thing, because every downstream artefact then corroborates the mistake.
+
   ---
 
   ## 3. Recommended architecture
@@ -1452,8 +1476,8 @@ labelled untested hypotheses in the gap analysis and should not stay that way.
 13. **Match on identity, not on a name you derived.** Any check that compares a generated
     label against a human-curated one will silently miss, because humans shorten names.
     The same rule binds the validator itself: never select the thing you are about to
-    work on by *position* — the first matching tab, the first file, the newest run. When
-    two candidates exist and nothing distinguishes them by identity, **refuse and name
-    them** rather than picking one. A heuristic that is right most of the time is worse
-    than a refusal, because its rare wrong answer is indistinguishable from a right one
-    and no later step can catch it (§2.18).
+    work on by *position or mere presence* — the first matching tab, the first file, the
+    newest run, "a report exists". When two candidates exist and nothing distinguishes
+    them by identity, **refuse and name them** rather than picking one. A heuristic that
+    is right most of the time is worse than a refusal, because its rare wrong answer is
+    indistinguishable from a right one and no later step can catch it (§2.18).

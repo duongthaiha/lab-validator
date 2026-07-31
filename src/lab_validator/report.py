@@ -348,11 +348,31 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
 
 
 def write_segment(run: Run, segment: Segment, outline: Outline | None = None):
-    """Write a section's report into the run folder and return its path."""
+    """Write a section's report into the run folder and return its path.
+
+    Records how far through the trace the report was written from, so a later
+    reader can tell a current report from a stale one. Without it, "the file
+    exists" is the only available test, and a report written before the last
+    three findings passes it.
+    """
     path = run.dir / segment_filename(segment.id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_segment(run, segment, outline), encoding="utf-8")
+    entry = run.segment(segment.id)
+    if entry is not None:
+        entry["reported_through"] = _last_seq(run, segment.id)
+        run._save()
     return path
+
+
+def _last_seq(run: Run, segment_id: str) -> int:
+    """The highest trace seq recorded against this section, or 0."""
+    seqs = [
+        s.get("seq") or 0
+        for s in run.steps()
+        if s.get("segment") == segment_id
+    ]
+    return max(seqs, default=0)
 
 
 def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | None = None) -> str:

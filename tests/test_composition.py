@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lab_validator import cli, walkloop  # noqa: E402
 from lab_validator.corpus import Heading, Outline  # noqa: E402
-from lab_validator.report import render  # noqa: E402
+from lab_validator.report import render, write_segment  # noqa: E402
 from lab_validator.runlog import Run, Segment  # noqa: E402
 
 BODY = """# Sign in
@@ -53,14 +53,13 @@ def _walked_run(tmp_path):
 def _opened(run, segment):
     """Start the section and read it the way the loop insists on.
 
-    Note what counts: a *recorded step* that scrolled, not a file on disk.
-    Reading is proven by evidence in the trace, because an instruction pane the
-    learner cannot scroll is a defect only a real scroll can find.
+    Note what counts: a *recorded step* that scrolled. Reading is proven by
+    evidence in the trace, because an instruction pane the learner cannot
+    scroll is a defect only a real scroll can find. Nothing here writes
+    ``sections/<id>.md`` -- that path is the section *report*, and conflating
+    "I read it" with "I reported it" is how a section advances unreported.
     """
     run.start_segment(segment.id)
-    path = run.dir / walkloop.segment_filename(segment.id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("read", encoding="utf-8")
     run.step(segment.id, verdict="PASS", action="read",
              capability="scroll_instructions", note="Scrolled the pane to the end.")
 
@@ -156,3 +155,65 @@ def test_the_report_admits_a_task_nobody_judged(tmp_path):
         "the run folder still knows, even though the section says done -- "
         "which is what lets the report tell the truth about coverage"
     )
+
+
+# --- is the section report current, or merely present? ---------------------
+
+
+def _both_tasks_judged(run, segment):
+    _opened(run, segment)
+    run.step(segment.id, verdict="PASS", instruction_ref="1-open-the-portal")
+    run.step(segment.id, verdict="PASS", instruction_ref="2-deploy-the-model")
+
+
+def test_a_section_with_every_task_judged_is_asked_to_report(tmp_path):
+    run, segment = _walked_run(tmp_path)
+    outline, _ = cli._outline_for(run)
+    _both_tasks_judged(run, segment)
+
+    move = walkloop.next_move(run, outline)
+
+    assert move.action == "report", (
+        "an unreported section must not advance -- an interrupted run would "
+        "then have walked it and delivered nothing about it"
+    )
+
+
+def test_a_current_report_lets_the_section_advance(tmp_path):
+    run, segment = _walked_run(tmp_path)
+    outline, _ = cli._outline_for(run)
+    _both_tasks_judged(run, segment)
+
+    write_segment(run, segment, outline)
+
+    assert walkloop.next_move(run, outline).action == "advance"
+
+
+def test_a_finding_recorded_after_the_report_reopens_it(tmp_path):
+    """The failure this catches is silent and permanent: the report on disk
+    reads clean while the trace beside it holds a defect nobody rendered."""
+    run, segment = _walked_run(tmp_path)
+    outline, _ = cli._outline_for(run)
+    _both_tasks_judged(run, segment)
+    write_segment(run, segment, outline)
+
+    run.step(segment.id, verdict="LAB001", instruction_ref="2-deploy-the-model",
+             domain="instruction", note="Re-checked: the model list ends at gpt-4.1.")
+
+    move = walkloop.next_move(run, outline)
+    assert move.action == "report", "the report predates a finding and must be rewritten"
+
+
+def test_a_run_from_an_older_version_is_still_readable(tmp_path):
+    """Run folders are evidence and outlive the code that wrote them. A run
+    with no `reported_through` recorded must not be forced to re-report; that
+    would rewrite sealed evidence to satisfy a newer bookkeeping field."""
+    run, segment = _walked_run(tmp_path)
+    outline, _ = cli._outline_for(run)
+    _both_tasks_judged(run, segment)
+    path = run.dir / walkloop.segment_filename(segment.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# s01\nWritten by an older version.\n", encoding="utf-8")
+
+    assert run.segment("s01").get("reported_through") is None
+    assert walkloop.next_move(run, outline).action == "advance"

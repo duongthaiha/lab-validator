@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 
 from .asks import Ask, asks_in
 from .corpus import Outline
-from .report import segment_filename
+from .report import _last_seq, segment_filename
 from .runlog import FINDING_VERDICTS, Run, Segment
 
 __all__ = [
@@ -233,7 +233,23 @@ def _is_blocked(run: Run, segment_id: str) -> bool:
 
 
 def _report_written(run: Run, segment: Segment) -> bool:
-    return (run.dir / segment_filename(segment.id)).exists()
+    """Is there a section report that reflects what the run currently knows?
+
+    Two claims, not one. The file must exist *and* have been written from at
+    least as far through the trace as the last step recorded for this section.
+    Existence alone was the original test, and it accepts a report written
+    before the last three findings -- which is exactly the report that reads
+    clean while the evidence beside it does not.
+    """
+    if not (run.dir / segment_filename(segment.id)).exists():
+        return False
+    through = segment.reported_through
+    if through is None:
+        # Written by an older version that did not record this. Run folders are
+        # evidence and outlive the code, so trust the file rather than demand a
+        # rewrite of a sealed run.
+        return True
+    return through >= _last_seq(run, segment.id)
 
 
 def next_move(

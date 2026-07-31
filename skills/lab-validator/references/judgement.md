@@ -159,14 +159,21 @@ does not announce itself; the lab appears to work and then fails obliquely, in
 several places at once, each of which reads as an unrelated bug.
 
 Turn the same rule on your own tooling. **Never select the thing you are about
-to work on by position** — the first matching window or tab, the first file, the
-newest folder. When several candidates exist and nothing tells them apart by
-identity, **refuse and name them**; do not resolve it with a heuristic. A
-heuristic that is right most of the time is worse than a refusal here, because
-its rare wrong answer looks exactly like a right one and nothing downstream can
-catch it. A validator that attaches to the wrong instance still produces
-screenshots, timestamps and findings that all corroborate each other — a
-confidently wrong report, which is the only output worse than none.
+to work on by position or by mere presence** — the first matching window or tab,
+the first file, the newest folder, "a report exists so the section is reported".
+When several candidates exist and nothing tells them apart by identity, **refuse
+and name them**; do not resolve it with a heuristic. A heuristic that is right
+most of the time is worse than a refusal here, because its rare wrong answer
+looks exactly like a right one and nothing downstream can catch it. A validator
+that attaches to the wrong instance still produces screenshots, timestamps and
+findings that all corroborate each other — a confidently wrong report, which is
+the only output worse than none.
+
+Presence is the easiest version to miss, because it looks like a check. *A file
+exists* does not mean *the file says what we now know*: an artefact written
+before the last three findings passes that test and then reads clean forever.
+Where an artefact summarises a growing body of evidence, record **how much of
+the evidence it was built from**, and treat a stale one as absent.
 
 Two disambiguators are evidence rather than guesswork, and both are cheap:
 record the candidates that existed *before* the action that creates the new one,

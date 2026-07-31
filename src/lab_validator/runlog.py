@@ -144,6 +144,11 @@ class Segment:
     ended: str | None = None
     lab_minutes_at_start: int | None = None
     lab_minutes_at_end: int | None = None
+    # The trace sequence the section report was written from. "A report exists"
+    # is not the same claim as "the report says what we now know": a stale one
+    # from an earlier attempt at the same section is a file on disk that
+    # silently omits every finding recorded since.
+    reported_through: int | None = None
     note: str | None = None
 
     @classmethod
