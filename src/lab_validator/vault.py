@@ -399,20 +399,32 @@ class Vault:
         return path
 
     @classmethod
-    def load(cls, run_dir: Path) -> Vault | None:
+    def load(cls, run_dir: Path, redactor=None) -> Vault | None:
         """Reopen a vault so a resumed run does not need the lab tab again.
 
         Returns ``None`` when there is nothing to load, because a run that was
         started before vaults existed is a normal thing to resume, not an error.
+
+        Takes a redactor for the same reason ``capture`` does, and it matters
+        more here. ``capture`` runs once, at launch, in the one place everybody
+        remembers. ``load`` runs on every resumed step, from seven call sites,
+        and until this parameter existed each of them received live secrets
+        with nothing masking them -- so a resumed run could type a password the
+        writer had never been told about. Registering at the boundary is what
+        stops "remember to prime the redactor" from being a rule somebody has
+        to keep.
         """
         path = cls.path_in(Path(run_dir))
         if not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(
+        vault = cls(
             credentials=tuple(
                 Credential(scope=c["scope"], label=c["label"], value=c["value"])
                 for c in data.get("credentials", [])
             ),
             captured_utc=data.get("capturedUtc", ""),
         )
+        if redactor is not None:
+            redactor.add_many((c.value, c.label) for c in vault.credentials)
+        return vault

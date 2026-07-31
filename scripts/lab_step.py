@@ -231,7 +231,7 @@ async def resolve_credential(lab: LabClient, run: Run, ref: str) -> str:
     this, and it should degrade rather than stop.
     """
     with contextlib.suppress(Exception):
-        if vault := Vault.load(run.dir):
+        if vault := Vault.load(run.dir, redactor=run.redactor):
             return vault.value(ref)
     return await lab.credential_value(ref)
 
@@ -264,8 +264,10 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
     if field not in ROLE_FIELDS:
         raise Stop(f"signin field must be one of {sorted(ROLE_FIELDS)}, not {field!r}")
 
-    vault = Vault.load(run.dir)
-    if False:
+    # Priming happens inside load, so a resumed run cannot type a secret the
+    # writer has never been told about.
+    vault = Vault.load(run.dir, redactor=run.redactor)
+    if vault is None:
         raise Stop(
             f"signin:{arg} needs the credentials this lab issued, and this run "
             "captured none. Launch through `lab-validator walk` so the Resources "
@@ -276,8 +278,10 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
     except VaultError as exc:
         raise Stop(f"signin:{arg} refused: {exc}") from exc
 
-    for cred in (username, password):
-        run.redactor.add(cred.value, f"{role}-{cred.label}".lower())
+    # No re-registration here: `Vault.load` above primed the redactor with every
+    # credential it holds. Masking at the boundary rather than at each use is
+    # the point -- a second copy of the rule here would be the thing that gets
+    # forgotten in the next function that types a secret.
     chosen = username if field == "username" else password
 
     before = await lab.screen_bytes()

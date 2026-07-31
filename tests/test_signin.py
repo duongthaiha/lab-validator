@@ -21,7 +21,7 @@ from PIL import Image
 
 from lab_validator.imaging import QUIET_THRESHOLD
 from lab_validator.labclient import Credential
-from lab_validator.runlog import Run, Segment
+from lab_validator.runlog import Redactor, Run, Segment
 from lab_validator.vault import Vault
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,16 +222,21 @@ def test_a_changed_screen_does_not_claim_the_sign_in_worked(tmp_path):
     assert "next capture" in note
 
 
-def test_the_measured_delta_is_recorded(tmp_path):
-    """A verdict derived from a number should show the number.
+def test_the_measured_delta_is_recorded_on_both_verdicts(tmp_path):
+    """A verdict derived from a number should show the number -- either way.
 
-    Otherwise the threshold is unauditable from the trace, and a run sitting
-    just under it looks identical to one sitting far below.
+    Both branches, deliberately. The first version of this test only exercised
+    the unchanged path, so deleting the delta from the *moved* path left it
+    green: a guard aimed at the branch the bug was not in.
     """
-    run = _run_with_vault(tmp_path)
     still = _frame((8, 64, 112))
-    _signin(run, FakeLab([still, still]), "vm")
-    assert "delta" in _last_step(run)["note"].lower()
+    blocked = _run_with_vault(tmp_path / "a")
+    _signin(blocked, FakeLab([still, still]), "vm")
+    assert "delta" in _last_step(blocked)["note"].lower()
+
+    passed = _run_with_vault(tmp_path / "b")
+    _signin(passed, FakeLab([_frame((8, 64, 112)), _frame((250, 250, 250))]), "vm")
+    assert "delta" in _last_step(passed)["note"].lower()
 
 
 def test_the_threshold_is_the_one_the_probe_already_calibrated(tmp_path):
@@ -258,11 +263,46 @@ def test_the_threshold_is_the_one_the_probe_already_calibrated(tmp_path):
 # --- secrets never reach the trace -----------------------------------------
 
 
-def test_neither_password_appears_in_the_trace(tmp_path):
-    """Both are registered with the redactor, not just the one typed.
+def test_both_passwords_are_masked_afterwards_not_just_the_one_typed(tmp_path):
+    """Tests the redactor on the *resumed* path, which is where this can fail.
 
-    A run that masks the credential it used and prints the one it rejected has
-    leaked a live secret while looking careful.
+    Two false starts are worth recording, because both looked fine.
+
+    The first version asserted neither password appears in `trace.jsonl`. It
+    passes with masking disabled entirely, because the note only holds a scope
+    and a label -- the secrets were never written, so masking was never
+    exercised.
+
+    The second asserted the redactor masks both after `do_signin`. It also
+    passed unconditionally, because the fixture built its vault with
+    `Vault.capture(..., redactor=run.redactor)`, which registers at capture
+    time. The test could not tell whether `do_signin` had done anything.
+
+    So this one throws the primed redactor away first, which is exactly what
+    `auto --run <folder>` does: a resumed run rebuilds its Run object, loads
+    the vault from disk, and until `Vault.load` took a redactor it would type
+    a password nothing had been told to mask.
+    """
+    run = _run_with_vault(tmp_path)
+    run.redactor = Redactor()
+    assert run.redactor.scrub(TWO_SIGNINS[3][2]) == TWO_SIGNINS[3][2], (
+        "the fixture must start unprimed or this proves nothing"
+    )
+
+    _signin(run, FakeLab([_frame((8, 64, 112)), _frame((30, 30, 30))]), "vm")
+
+    leak = f"used {TWO_SIGNINS[3][2]} after rejecting {TWO_SIGNINS[1][2]}"
+    masked = run.redactor.scrub(leak)
+    assert TWO_SIGNINS[3][2] not in masked, "the credential it typed is not masked"
+    assert TWO_SIGNINS[1][2] not in masked, "the credential it rejected is not masked"
+
+
+def test_no_password_reaches_the_trace(tmp_path):
+    """Kept as a floor, and honest about being weaker than it looks.
+
+    This passes for the wrong reason today -- the note holds no values at all.
+    It is here to fail if someone puts one there, not as evidence the redactor
+    works; that is the test above.
     """
     run = _run_with_vault(tmp_path)
     _signin(run, FakeLab([_frame((8, 64, 112)), _frame((30, 30, 30))]), "vm")
@@ -311,3 +351,27 @@ def test_a_run_with_no_vault_says_how_to_get_one(tmp_path):
     with pytest.raises(module.Stop) as exc:
         _signin(run, FakeLab([_frame((8, 64, 112))]), "vm")
     assert "walk" in str(exc.value)
+
+
+def test_a_cred_ref_on_a_resumed_run_primes_the_redactor(tmp_path):
+    """`cred:` hands back a secret to type. On a resumed run, nothing had
+    registered it.
+
+    Same defect as the sign-in path and a wider blast radius: every `cred:` ref
+    in every step goes through here, and the value is returned to be typed. A
+    walk resumed with `auto --run <folder>` would type it with the writer
+    unable to mask it, so any later step quoting the field -- an error toast, a
+    tool result -- would print a live secret into the trace.
+    """
+    run = _run_with_vault(tmp_path)
+    run.redactor = Redactor()
+    secret = TWO_SIGNINS[3][2]
+    assert run.redactor.scrub(secret) == secret, "fixture must start unprimed"
+
+    module = _lab_step()
+    value = asyncio.run(
+        module.resolve_credential(FakeLab([_frame((8, 64, 112))]), run, "vm/password")
+    )
+
+    assert value == secret, "the ref must still resolve"
+    assert secret not in run.redactor.scrub(f"leaked {secret}")

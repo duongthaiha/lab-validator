@@ -268,3 +268,38 @@ def test_half_a_credential_pair_refuses_rather_than_signing_in_with_one():
 def test_an_unknown_sign_in_names_the_ones_that_exist():
     with pytest.raises(VaultError, match="Unknown sign-in"):
         Vault.capture(TWO_SIGNINS).signin("database")
+
+
+def test_load_primes_the_redactor_it_is_given(tmp_path):
+    """The resumed-run guarantee, asserted directly.
+
+    `capture` has registered with the redactor since it was written, on the
+    grounds that there must be no way to take a credential without teaching the
+    writer to mask it. `load` did not, and `load` is the one that runs on every
+    resumed step from seven call sites -- so `auto --run <folder>` could type a
+    password nothing had been told about.
+    """
+    d = run_dir(tmp_path)
+    Vault.capture(ROWS).save(d)
+
+    fresh = Redactor()
+    Vault.load(d, redactor=fresh)
+
+    # Only values the redactor will accept. A short one such as `Admin` is
+    # dropped on purpose -- masking a 5-character common word corrupts far more
+    # text than it protects -- and asserting otherwise would make this test
+    # describe a policy the project deliberately does not have.
+    maskable = [r for r in ROWS if len(r.value) >= Redactor.min_length]
+    assert maskable, "the fixture has nothing long enough to mask"
+    for row in maskable:
+        assert row.value not in fresh.scrub(f"leaked {row.value} here")
+
+
+def test_load_without_a_redactor_still_works(tmp_path):
+    """Read-only callers exist -- `scope` reviews a run without typing anything.
+
+    Requiring a redactor would make the safe path harder than the unsafe one.
+    """
+    d = run_dir(tmp_path)
+    Vault.capture(ROWS).save(d)
+    assert Vault.load(d) is not None
