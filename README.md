@@ -21,6 +21,27 @@ a silent model substitution (`G-30`) and a `.env` file that is wrong in two inde
 ways (`G-70`, `G-71`). Findings are in [`docs/gapanalysis.md`](docs/gapanalysis.md);
 engineering lessons are in [`docs/approach.md`](docs/approach.md) §2.8–§2.10.
 
+## Guidance — four documents, four different questions
+
+The guidance is deliberately split, because "how do I run this" and "is what I
+just saw a defect" are not the same question and get read at different moments.
+Pick by the question, not by reading all four:
+
+| Question | Read |
+| --- | --- |
+| How do I run a validation from nothing? | this README, [Running a validation](#running-a-validation) |
+| What do I do *next*, mid-walk? | don't read — ask: `lab-validator next` |
+| Is this observation a defect? Whose? What evidence do I need? | [`skills/lab-validator/references/judgement.md`](skills/lab-validator/references/judgement.md) |
+| What are the steps of a walk, in order? | [`skills/lab-validator/SKILL.md`](skills/lab-validator/SKILL.md) |
+| Why is the engine built this way, and what went wrong before? | [`docs/approach.md`](docs/approach.md) |
+
+`judgement.md` is the one worth reading even if you never run this tool. Each of
+its principles was paid for by a wrong finding — a defect claimed on one
+observation, a blocker reported without re-checking, a whole section skipped
+because a report file happened to exist. They are written with no platform
+nouns, so they transfer to any "walk a documented procedure and report where it
+diverges" problem.
+
 ## Credentials — read this first
 
 **This project never stores your Learning Campus password.** Sign-in goes
@@ -363,9 +384,9 @@ lab-validator install-skill --dry-run    # show what would be written
 
 The repo copy is the source of truth; the installed copy is a deployment of it.
 A test asserts the two have not drifted, and another parses every command out of
-`SKILL.md` and checks it against the real argument parser — a skill that teaches
-a renamed flag doesn't produce a helpful error, it produces a run that dies
-partway through a lab with a human waiting.
+**both `SKILL.md` and this README** and checks it against the real argument
+parser — documentation that teaches a renamed flag doesn't produce a helpful
+error, it produces a run that dies partway through a lab with a human waiting.
 
 `references/judgement.md` is written with **no platform nouns**, so it transfers
 to any "walk a documented procedure and report where it diverges" problem.
