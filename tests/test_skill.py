@@ -490,3 +490,30 @@ def test_every_example_in_the_sections_help_parses(command, capsys, tmp_path):
     for example in examples:
         selection = scope.parse(example, run)
         assert selection.chosen, f"`{command} --help` offers `{example}`, which selects nothing"
+def test_no_doc_shows_a_prompt_the_code_does_not_print():
+    """The other direction, and the one that let a wrong copy through.
+
+    The test above is satisfied by *one* correct copy anywhere in the file. A
+    second, paraphrased copy -- "Which sections should this run walk?" -- sat
+    in the Quick start next to it and passed, because the real wording still
+    appeared further down. A reader starting at the top would have learned a
+    prompt that is never printed, and looked for options that do not exist.
+
+    So: any line that asks about sections has to be the line the code prints.
+    """
+    from lab_validator import scope
+
+    real = scope.PROMPT_HELP.split("|")[0].strip()
+    # A line that asks about sections *and* ends in a question is claiming to
+    # be the prompt. Prose that merely mentions "which sections to walk" is
+    # describing it, and reads correctly however the prompt is worded.
+    asking = re.compile(r"^.*\bsections\b[^\n]*\?[^\n]*$", re.M | re.I)
+
+    for name, path in DOCS.items():
+        for line in asking.findall(path.read_text(encoding="utf-8")):
+            stripped = line.strip().lstrip("#").strip()
+            if stripped.startswith(("|", "-", "*", ">")) or "`" in stripped:
+                continue  # prose, a table cell, or an inline code span
+            assert real in line, (
+                f"{name} shows {stripped!r}, but the code prints {real!r}"
+            )

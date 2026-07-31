@@ -21,6 +21,70 @@ a silent model substitution (`G-30`) and a `.env` file that is wrong in two inde
 ways (`G-70`, `G-71`). Findings are in [`docs/gapanalysis.md`](docs/gapanalysis.md);
 engineering lessons are in [`docs/approach.md`](docs/approach.md) §2.8–§2.10.
 
+## Quick start
+
+Everything after step 2 is automated; step 2 is the only one that needs a human.
+
+```powershell
+# 1. a browser to attach to -- opens once, you keep it running
+lab-validator session --launch --profile "<your Edge profile>"
+
+# 2. sign in to mslearningcampus.com by hand, in that window
+
+# 3. ask which labs you can actually launch. Do not guess a URL.
+lab-validator discover --list
+
+# 4. walk it, with an agent
+lab-validator auto --url "<the URL step 3 printed>" --name "<the title step 3 printed>" --max-turns 40 --turn-timeout 900
+```
+
+Step 3 prints something like:
+
+```
+1 enrolment(s) at https://mslearningcampus.com/User/CurrentTraining/3399370
+
+ * WorkshopPLUS - Azure AI Platform and Services                enrolment 5928204
+     slug: azure-ai-platform  (already onboarded)
+```
+
+so step 4 becomes:
+
+```powershell
+lab-validator auto --url "https://mslearningcampus.com/User/CurrentTraining/3399370" --name "WorkshopPLUS - Azure AI Platform and Services" --max-turns 40 --turn-timeout 900
+```
+
+**Why step 3 exists, and why it is not optional.** Learning Campus URLs are not
+guessable, and two plausible ones do not work. The catalogue root
+(`mslearningcampus.com/Pages/ms-learningcampus`) carries no enrolment at all and
+is correctly refused with *"no launchable enrolment found on that page"*. A
+`/ClassEnrollment/<id>` form — which this README itself recommended until the
+day this section was written — resolves to nothing either. `discover --list`
+reads the page with your signed-in session and prints what is launchable
+**now**, which is the only answer that cannot go stale.
+
+Then `auto` launches the lab, waits for the client, extracts the instructions,
+captures the lab's own credentials — and **stops to ask which sections to
+walk**, because validating 23 sections takes hours:
+
+```
+Which sections should I walk?  'all' | '4' | '1,4,7' | '4-6' | '?' to re-print the review  [Enter = all]
+```
+
+Pass `--sections 4-6` to skip the prompt entirely.
+The report lands at `runs/<timestamp>/gap-analysis.md`, and is rewritten after
+every step — a run you interrupt is still a run you can read.
+
+**If it says the lab has closed**, that is the tool refusing to invent: a
+Skillable lab that has ended keeps its tab, title and URL, so nothing else would
+have noticed. Relaunch the lab and resume the same run with
+`lab-validator auto --run runs/<timestamp>`.
+
+**What of this is proven.** Steps 1–3 and the resolution of that URL were run
+against the live tenant on 2026-07-31. `auto` walking a section to completion
+has not yet been observed end to end — the one run that got that far ended when
+the lab itself closed. Treat step 4 as the documented path, not a demonstrated
+one, and see [`docs/agent.md`](docs/agent.md) for what each stop message means.
+
 ## Guidance — five documents, five different questions
 
 The guidance is deliberately split, because "how do I run this" and "is what I
@@ -173,7 +237,8 @@ One command starts a run on any lab, including one this repo has never seen.
 The human's only job is the sign-in gesture — everything after it is automated.
 
 ```powershell
-lab-validator walk --url "https://mslearningcampus.com/ClassEnrollment/5928204" `
+lab-validator discover --list                     # what can I actually launch?
+lab-validator walk --url "https://mslearningcampus.com/User/CurrentTraining/3399370" `
                    --name "WorkshopPLUS - Azure AI Platform and Services"
 ```
 
