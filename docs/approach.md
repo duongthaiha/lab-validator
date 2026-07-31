@@ -1112,6 +1112,99 @@ Operating the thing this section justifies — what each stop message means, whi
 controls the model is given and which are withheld, and what is still unproven —
 is [`agent.md`](agent.md).
 
+
+### 2.20 A scope decision is evidence, and a report must state its own scope
+
+Walking everything is expensive — 23 sections, 6 217 steps, roughly a day — so
+being able to walk three of them is obviously useful. What is less obvious is
+that the selection is the easy half. Filtering a loop that already picks
+`next(s for s in segments if s.status == "pending")` needs no loop change at all:
+give the excluded sections some other status and it skips them.
+
+The hard half is that **a scoped run answers a different question, and every
+consumer downstream assumes it answered the original one.** Walk 3 of 23 sections
+with only the filtering in place and the report opens *"Can a learner complete
+this lab? **YES**"* — a confident, well-formatted, entirely wrong answer about
+twenty sections nobody looked at, manufactured by a convenience feature. That is
+the exact failure this project exists to prevent, so the rule has to be blunt:
+
+> A scoped run can never answer YES. Coverage counts against what was selected,
+> the exclusion is stated next to the verdict, and the sections nobody chose are
+> named — not merely absent.
+
+Absence is the problem. A section missing from a findings list reads as a section
+with no findings. The only fix is to make the ignorance **positive**: print it,
+count it, give it its own warning block. This is principle 9 (record what was not
+checked as loudly as what failed) applied to a case where the omission was
+deliberate rather than accidental — which makes it *more* likely to be forgotten,
+not less, because somebody chose it and therefore feels they already know.
+
+**Three kinds of ignorance, and merging any two destroys both.** This codebase
+now distinguishes:
+
+| Status | Cause | What the reader should do |
+| --- | --- | --- |
+| `never_reached` | the walk ran out of road — budget, crash, clock | re-run and continue; this is a failure |
+| `skipped` | the walker passed over it mid-walk | look at why it was passed over |
+| `not_selected` | a human excluded it before the walk began | widen the scope, or accept a narrower claim |
+
+Same ignorance, three different causes and three different next actions. Fold
+`not_selected` into `never_reached` and a deliberate choice reads as a crash;
+fold it into `skipped` and a scoping decision reads as a walker judgement.
+
+**The obvious word was already taken.** `skipped` was the natural name and it was
+in use — `lab_step.py --end-segment skipped` had meant *the walker passed over
+this* since long before scoping existed, and `describe()` counted it as
+accounted-for. Reusing it would have inflated the coverage figure with sections
+nobody opened: the one number that must never flatter. The cost of checking was
+one grep; the cost of not checking would have been a coverage metric that lies in
+exactly the situation it exists to describe. **Before naming a state, grep for
+the word — a name that already means something else is worse than an ugly one.**
+
+**A summary must describe the result, not the request.** `apply()` refuses to
+un-walk a section that is `done`, `blocked` or `in_progress` — walked sections are
+evidence and a narrower scope must never erase them — so what was *asked for* and
+what *happened* legitimately differ. The first version reported the request:
+"4 not selected", when three of the four had been refused and only one had
+actually changed. The numbers did not add up to the section count, and they did
+not match the run folder. Anything a user reconciles against reality must be
+computed **after** the mutation, from the same place they will look.
+
+**Word order carries a claim.** The terminal message read:
+
+> …3 of 6 sections were not selected…, but 6 task(s) across 3 of them have no
+> recorded verdict
+
+"them" binds to the nearest plural noun phrase, so this asserts that the
+*unselected* sections have unjudged tasks — the precise opposite of the truth,
+since unselected sections have no tasks judged or otherwise, and the holes are in
+the sections that *were* walked. Both clauses were individually true. Sequencing
+them made the sentence false. The fix was to put the clause next to what it
+describes, name it explicitly ("of the sections that were walked"), and start the
+other with "Separately," — and the guard asserts the *index ordering* of the two
+phrases, because a test for both substrings passes in either arrangement.
+
+**All three of these were found by driving the finished feature, none by the 35
+tests written for it.** The tests were written against the intended behaviour and
+found it present. Reading the output as a user reads it — one paragraph, in
+order — found a sentence that meant the opposite of what it said, an error
+message double-quoted by `str(KeyError)` reprising its argument, and a count that
+did not add up. That is now three features running (§2.18, §2.19, this one) where
+driving the assembled thing found defects the unit tests structurally could not.
+It should be the last step of every feature, not an optional extra.
+
+**Record who decided.** A selection carries `how`: `flag`, `prompt` or `default`.
+Without it a run that nobody was asked about is indistinguishable, six months
+later, from one somebody deliberately narrowed. `default` means the question was
+never put — the manifest says so, and it must, because "somebody chose this"
+is a claim and claims need evidence like any other. For the same reason
+`selections` is a list appended to rather than a field overwritten: re-scoping a
+run is a decision with a history, not a setting.
+
+Operating this — the review, the syntax, what to select and what it costs — is in
+[the README](../README.md#reviewing-what-you-got-and-choosing-what-to-walk) and
+Step 4 of the skill.
+
 ---
 
 ## 3. Recommended architecture

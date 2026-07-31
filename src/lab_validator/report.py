@@ -48,6 +48,7 @@ STATUS_WORD = {
     "done": "walked to the end",
     "blocked": "**blocked part-way**",
     "skipped": "skipped",
+    "not_selected": "not selected for this run",
     "in_progress": "*still in progress*",
     "pending": "*not started*",
 }
@@ -375,6 +376,14 @@ def _last_seq(run: Run, segment_id: str) -> int:
     return max(seqs, default=0)
 
 
+def _sections_were(n: int) -> str:
+    """'1 section was' / '2 sections were'. These two warning blocks are the
+    sentences a reader is most likely to quote into a bug, so they should not
+    read as if nobody proofread them. Verb included because agreement is the
+    half that gets forgotten."""
+    return "1 section was" if n == 1 else f"{n} sections were"
+
+
 def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | None = None) -> str:
     summary = run.summary()
     manifest = run.manifest
@@ -407,9 +416,15 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     retracted = run.retracted()
     findings = run.findings()
     findings.sort(key=lambda s: (SEVERITY_ORDER.get(s.get("severity", "minor"), 9), s["seq"]))
+    # A scoped run answers a *different question*, and must never be allowed to
+    # answer the whole one. Written as its own term rather than left to fall out
+    # of `done != total`: that arithmetic happens to be right today, and a
+    # coincidence is not a guarantee.
+    not_selected = summary["segments"].get("not_selected") or []
     all_walked = (
         summary["segments"]["done"] == summary["segments"]["total"]
         and not summary["segments"]["never_reached"]
+        and not not_selected
     )
     blocked_steps = [s for s in steps if s.get("verdict") in ("BLOCKED", "DEFERRED")]
     verdict = completability(findings, blocked_steps, all_walked=all_walked)
@@ -423,6 +438,12 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     add("")
     add(verdict.word)
     add("")
+    if not_selected:
+        add(f"> **Scoped run.** {len(not_selected)} of {summary['segments']['total']} "
+            "sections were not selected and were never attempted, so this answers "
+            "*\"can a learner complete the sections that were chosen\"* — not the "
+            "whole lab.")
+        add("")
     if not all_walked and verdict.verdict != "unknown":
         add("> Scoped to what was walked. Sections that were never reached are "
             "unknown, not correct — see Coverage.")
@@ -432,11 +453,19 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     # ---- coverage -------------------------------------------------------
     done = summary["segments"]["done"]
     total = summary["segments"]["total"]
-    pct = (done / total * 100) if total else 0.0
+    selected = total - len(not_selected)
     add("## Coverage")
     add("")
-    add(f"**{done} of {total} sections completed ({pct:.0f}%)** across "
-        f"{summary['steps']:,} recorded steps and {summary['heartbeats']:,} heartbeats.")
+    if not_selected:
+        pct = (done / selected * 100) if selected else 0.0
+        add(f"**{done} of {selected} selected sections completed ({pct:.0f}%)** across "
+            f"{summary['steps']:,} recorded steps and {summary['heartbeats']:,} heartbeats.")
+        add("")
+        add(f"**{len(not_selected)} of {total} sections were not selected for this run.**")
+    else:
+        pct = (done / total * 100) if total else 0.0
+        add(f"**{done} of {total} sections completed ({pct:.0f}%)** across "
+            f"{summary['steps']:,} recorded steps and {summary['heartbeats']:,} heartbeats.")
     add("")
     add("| Section | Module | Status | Steps | Findings | Report |")
     add("|---|---|---|---|---|---|")
@@ -449,6 +478,7 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         )
         status = seg.get("status") or "pending"
         mark = {"done": "done", "blocked": "**blocked**", "skipped": "skipped",
+                "not_selected": "*not selected*",
                 "in_progress": "*part*"}.get(status, "*not reached*")
         report = segment_filename(seg["id"])
         link = f"[section]({report})" if (run.dir / report).exists() else "-"
@@ -457,8 +487,17 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     add("")
     never = summary["segments"]["never_reached"]
     if never:
-        add(f"> **{len(never)} sections were never reached.** Nothing in this report "
+        add(f"> **{_sections_were(len(never))} never reached.** Nothing in this report "
             "says anything about them — they are unknown, not correct.")
+        add("")
+    if not_selected:
+        # A separate sentence from the one above, because they are separate
+        # facts: "never reached" is a walk that ran out of road, "not selected"
+        # is a decision somebody made before it started. Same ignorance,
+        # different cause, different thing to do about it.
+        add(f"> **{_sections_were(len(not_selected))} not selected for this run.** They "
+            "were never attempted — out of scope, not correct. Re-run with a wider "
+            "`--sections` to cover them.")
         add("")
 
     # Two coverage claims the section table cannot make, both of the same kind:

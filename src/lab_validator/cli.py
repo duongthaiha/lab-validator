@@ -48,6 +48,7 @@ COMMANDS = {
 BUILTINS = {
     "walk": "start a run from a lab URL (the human signs in)",
     "auto": "walk the whole lab with an agent (the human only signs in)",
+    "scope": "review what was captured and choose which sections to walk",
     "next": "what the walk loop says to do now, and why",
     "install-skill": "copy skills/lab-validator into ~/.copilot/skills",
 }
@@ -89,6 +90,7 @@ def _delegate(script: str, argv: list[str]) -> int:
 async def _walk(args) -> int:
     from playwright.async_api import async_playwright
 
+    from . import scope
     from .browser import attached_context
     from .corpus import extract
     from .discovery import resolve
@@ -248,7 +250,42 @@ async def _walk(args) -> int:
                 print("  findings only. It cannot check any of:")
                 for gap in target.enrichment_gaps():
                     print(f"    - {gap}")
-            print("\nnext: lab-validator run --next")
+
+            # 7. Scope. Everything above is capture; everything below is hours of
+            # walking. This is the moment to ask, and it costs the human nothing
+            # extra because they are already at the keyboard -- they signed in by
+            # hand a few minutes ago.
+            #
+            # Nothing here can be inferred: only a person knows which sections
+            # they just edited. So --sections decides if given, a terminal is
+            # asked if there is one, and otherwise everything is walked, which is
+            # what this command did before selection existed.
+            print()
+            try:
+                applied = scope.select(
+                    run, args.sections, outline=outline, vault=vault
+                )
+            except scope.ScopeError as exc:
+                print(f"--sections: {exc}", file=sys.stderr)
+                return 2
+            except Exception as exc:  # noqa: BLE001 - capture is done; do not lose it
+                # Everything expensive already happened. Failing here would throw
+                # away a launched lab, an extracted corpus and a captured vault
+                # over the step that decides how much of it to walk -- and the
+                # fallback is simply the behaviour this command had before
+                # selection existed, so it is safe to take.
+                run.log(f"scope gate failed: {type(exc).__name__}: {exc}")
+                print(f"scope     : {type(exc).__name__}: {exc}")
+                print("            ALL sections stay selected; narrow it with "
+                      "`lab-validator scope --sections`")
+                applied = None
+            else:
+                print(f"review    : {run.dir / scope.REVIEW_FILENAME}")
+
+            if applied is not None and applied.not_selected_now:
+                print("\nnext: lab-validator run --next   (scoped; the rest stay unknown)")
+            else:
+                print("\nnext: lab-validator run --next")
             return 0
         finally:
             await browser.close()
@@ -266,6 +303,7 @@ def cmd_auto(args) -> int:
     and asks a model only where judgement is required -- so every refusal the
     loop makes still holds when nobody is watching. See ``agent.py``.
     """
+    from . import scope
     from .agent import AgentUnavailable, walk_autonomously
     from .runlog import Run
 
@@ -273,6 +311,18 @@ def cmd_auto(args) -> int:
 
     if args.run:
         run_dir = Path(args.run)
+        # Driving a run somebody already captured. The selection still has to be
+        # honoured, and it has to be applied *here* rather than assumed, because
+        # this is the only path into the agent that skips the walk's own gate.
+        if args.sections:
+            try:
+                run = Run.open(run_dir)
+                scope.select(
+                    run, args.sections, outline=_outline_for(run)[0], interactive=False
+                )
+            except scope.ScopeError as exc:
+                print(f"--sections: {exc}", file=sys.stderr)
+                return 2
     else:
         # Which run is this? Record what existed before walking, so the new one
         # is identified by *not having been there*, rather than by being newest.
@@ -385,6 +435,90 @@ def _outline_for(run) -> tuple[object | None, str]:
     return Outline.load(sibling), ""
 
 
+def _open_run(args):
+    """Open the run named by `--run`, or the latest under `--runs`.
+
+    Returns `(run, exit_code)`; exactly one of them is None.
+
+    `--run` and `--runs` sit next to each other on two commands and mean
+    opposite things -- one folder versus the folder of folders -- so pointing
+    `--run` at a runs root is the mistake people actually make. It used to exit
+    with a `FileNotFoundError` traceback, which reads as a crash rather than as
+    a typo. Detect that specific case and name the runs inside it, which is the
+    same move `LabClient.find` and `scope.parse` already make: refuse, and say
+    what the real candidates were.
+    """
+    from .runlog import Run
+
+    runs_root = Path(args.runs or "runs")
+    if not args.run:
+        run = Run.latest(runs_root)
+        if run is None:
+            print(f"no run found under {runs_root}", file=sys.stderr)
+            return None, 2
+        return run, None
+
+    path = Path(args.run)
+    try:
+        return Run.open(path), None
+    except FileNotFoundError as exc:
+        print(f"{exc}", file=sys.stderr)
+        inside = sorted(p.name for p in path.glob("*") if (p / "run.json").is_file())
+        if inside:
+            print(f"that looks like a runs root. It holds: {', '.join(inside)}",
+                  file=sys.stderr)
+            print(f"did you mean --run {path / inside[-1]}?", file=sys.stderr)
+        return None, 2
+
+
+def cmd_scope(args) -> int:
+    """Review what a run captured, and choose what is worth walking.
+
+    Read-only unless ``--sections`` is given. That default is deliberate: this
+    command exists so somebody can *look* before committing hours, and a review
+    tool that silently rewrites the thing being reviewed is not one.
+
+    It is also the re-scoping path. A walk that turns up something interesting
+    in section 4 is a good reason to add 5 and 6, so this may widen a run at any
+    point -- but never narrow one, because a walked section is evidence.
+    """
+    from . import scope
+    from .vault import Vault
+
+    run, code = _open_run(args)
+    if run is None:
+        return code
+
+    outline, why_not = _outline_for(run)
+    vault = None
+    with contextlib.suppress(Exception):
+        vault = Vault.load(run.dir)
+
+    if not args.sections:
+        if outline is None:
+            print(f"note: {why_not}")
+        path = scope.write_review(run, outline, vault)
+        print(scope.review(run, outline, vault))
+        print(f"written to {path}")
+        print("\nnothing changed. Re-run with --sections to choose.")
+        return 0
+
+    try:
+        scope.select(run, args.sections, outline=outline, vault=vault, interactive=False)
+    except scope.ScopeError as exc:
+        print(f"--sections: {exc}", file=sys.stderr)
+        return 2
+
+    if (run.dir / "gap-analysis.md").exists():
+        # The report on disk was rendered against the old scope, so it now
+        # understates or overstates what this run covers. Saying so beats
+        # letting somebody read a stale file that looks current.
+        print("\nnote: gap-analysis.md predates this scope change; re-render it "
+              "before reading it as current.")
+    print(f"\nnext: lab-validator next --run {run.dir}")
+    return 0
+
+
 def cmd_next(args) -> int:
     """Print the next move, decided from the run folder alone.
 
@@ -393,15 +527,12 @@ def cmd_next(args) -> int:
     judgement is the one part that cannot be packaged. Deciding *what* comes
     next, and refusing to advance past a task nobody judged, can be.
     """
-    from .runlog import Run
     from .vault import Vault
     from .walkloop import describe, next_move
 
-    runs_root = Path(args.runs or "runs")
-    run = Run.open(Path(args.run)) if args.run else Run.latest(runs_root)
+    run, code = _open_run(args)
     if run is None:
-        print(f"no run found under {runs_root}", file=sys.stderr)
-        return 2
+        return code
 
     outline, why_not = _outline_for(run)
     if outline is None:
@@ -484,6 +615,7 @@ def main() -> int:
                        help="seconds to wait for Launch to become clickable")
         w.add_argument("--client-budget", type=float, default=300.0,
                        help="seconds to wait for the lab client to answer")
+        w.add_argument("--sections", help="which sections to walk: all | s01,s04 | s04..s06")
         w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
         return cmd_walk(w.parse_args(args.rest))
 
@@ -508,11 +640,21 @@ def main() -> int:
                        help="seconds to wait for Launch to become clickable")
         a.add_argument("--client-budget", type=float, default=300.0,
                        help="seconds to wait for the lab client to answer")
+        a.add_argument("--sections", help="which sections to walk: all | s01,s04 | s04..s06")
         a.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
         parsed = a.parse_args(args.rest)
         if not parsed.run and not parsed.url:
             a.error("--url is required unless --run names an existing run")
         return cmd_auto(parsed)
+
+    if args.command == "scope":
+        s = argparse.ArgumentParser(prog="lab-validator scope")
+        s.add_argument("--run", help="run folder (default: the most recent)")
+        s.add_argument("--runs", help="runs root (default: ./runs)")
+        s.add_argument("--sections",
+                       help="which sections to walk: all | s01,s04 | s04..s06. "
+                            "Omit to review without changing anything.")
+        return cmd_scope(s.parse_args(args.rest))
 
     if args.command == "next":
         n = argparse.ArgumentParser(prog="lab-validator next")

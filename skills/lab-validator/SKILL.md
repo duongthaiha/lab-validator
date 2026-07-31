@@ -36,21 +36,21 @@ the recorded trace of what was observed.
 
 ## Two ways to drive this, and how to tell which you are
 
-The eight steps below are the walk. Something has to sequence them, and it is
+The nine steps below are the walk. Something has to sequence them, and it is
 either you or `lab-validator auto`.
 
 | | You drive | `auto` drives |
 |---|---|---|
 | Sequencing | you run each command | Python runs the loop; a model is asked only to PERFORM |
-| Steps 1–3, 7 | yours | already handled — do not repeat them |
-| Steps 4–6, 8 | yours | **yours, and the reason you are reading this** |
+| Steps 1–4, 8 | yours | already handled — do not repeat them |
+| Steps 5–7, 9 | yours | **yours, and the reason you are reading this** |
 
 **If you have no shell, you are inside `auto`.** Tools outside the learner's path
 are denied there — not as a restriction but because a lab you fixed from a
 terminal reports as working while the learner still cannot finish it. Under
 `auto` the sections open, close, report and advance without you; your entire job
-is the judgement in Steps 4–6 and 8. Trying to run the commands in Steps 2, 3 and
-7 will simply be refused.
+is the judgement in Steps 5–7 and 9. Trying to run the commands in Steps 2, 3, 4
+and 8 will simply be refused.
 
 Either way the rules are the same, because it is the same loop.
 
@@ -103,7 +103,65 @@ config that disagrees with what the Resources tab just issued.
   check — model identity, promised resources, VM baseline. Those remain open
   questions and belong in the coverage table, not in silence.
 
-## Step 4 — Read what the lab actually asks for, before doing anything
+## Step 4 — Review what was captured, then choose what to walk
+
+The whole lab is expensive: the reference run was 23 sections, 6 217 steps and
+about a day. `walk` therefore stops here — after the instructions are segmented
+and the credentials are captured, before it spends anything — and shows you what
+it got.
+
+```powershell
+lab-validator scope --run <run folder>                        # print the review, change nothing
+lab-validator scope --run <run folder> --sections s04..s06    # narrow it
+```
+
+Or decide up front and skip the prompt entirely:
+
+```powershell
+lab-validator walk --url "<lab url>" --name "<lab title>" --sections s04..s06
+```
+
+Ranges use `..`, not `-`: section ids contain hyphens (`s04-deploy-models`), so
+`s04-s06` is indistinguishable from an id and is refused with a hint. An unknown
+or ambiguous id is refused too, naming the real candidates. A typo that silently
+selected nothing would be worse than a refusal — it would produce a clean report
+about a lab nobody looked at.
+
+**What to select.** Scope to the sections the question is actually about:
+
+| The question | Scope |
+| --- | --- |
+| "we edited section 4, did we break it?" | that section and anything downstream of it |
+| "is this lab still fit to teach?" | everything — there is no shortcut to that answer |
+| "the learner said lab 10 fails" | that section, plus the setup sections it depends on |
+| "is the environment even right?" | Step 3's preflight alone may answer it |
+
+Dependencies matter more than they look. Section 10 failing because section 4
+never created the resource is a **setup** finding about section 4, and you will
+misattribute it to section 10 if you did not walk section 4.
+
+**What this costs you, and what you must not do about it.** A scoped run answers
+a narrower question, and the report says so: `**Scoped run.**` sits beside the
+verdict, coverage counts against the selection, and unselected sections get their
+own warning — kept separate from *never reached*, because a walk that ran out of
+road and a decision somebody made are different facts.
+
+> A scoped run **can never answer YES** to "can a learner complete this lab".
+> Do not write that it can, in any summary you produce. You looked at three
+> sections out of twenty-three; you know nothing about the other twenty, and
+> "no findings" there means nobody looked, not that they are fine.
+
+Re-scoping only widens. `scope` refuses to un-walk a section that is `done`,
+`blocked` or `in_progress` and tells you which it refused: walked sections are
+evidence, and a narrower scope must never erase them. After widening, the
+existing `gap-analysis.md` is stale — re-run the report at Step 9.
+
+`<run>/review.md` holds the full review: preflight verdict, structural anomalies,
+the section table, and credentials **by label, scope and shape only**. It never
+contains a credential value, because it is a text artefact somebody will paste
+into a bug.
+
+## Step 5 — Read what the lab actually asks for, before doing anything
 
 ```powershell
 lab-validator next                            # what to do now, and why
@@ -146,7 +204,7 @@ lab-validator step --segment s04 --label read-instructions --do read
 If the pane does not move, that is a `LAB003 / domain=setup` finding recorded
 automatically — the lab is unreadable, which gates everything after it.
 
-## Step 5 — Do the work, in the learner's path
+## Step 6 — Do the work, in the learner's path
 
 ```powershell
 lab-validator step --segment s04 --label deploy-gpt4o `
@@ -171,7 +229,7 @@ opinion about.
 button proves nothing. Press the button and read the artifact it was supposed to
 produce. The most dangerous lab defects are steps that *succeed while failing*.
 
-## Step 6 — Record a verdict for each instruction
+## Step 7 — Record a verdict for each instruction
 
 ```powershell
 lab-validator step --segment s04 --label task2-deploy --verdict LAB001 `
@@ -201,7 +259,7 @@ Record `PASS` for things you verified correct, with the same rigour. **A report
 with no positive evidence cannot distinguish "verified correct" from "never
 reached"**, and a reader will assume the flattering one.
 
-## Step 7 — Finish the section and move on
+## Step 8 — Finish the section and move on
 
 ```powershell
 lab-validator run --finish done        # or: blocked / partial
@@ -217,7 +275,7 @@ multi-hour unattended walk *will* be interrupted, and a run that dies with all
 its findings unwritten has produced nothing. `next` reads only the run folder,
 so resuming an interrupted walk is the same command as continuing a live one.
 
-## Step 8 — Report
+## Step 9 — Report
 
 ```powershell
 lab-validator run --report

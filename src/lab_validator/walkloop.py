@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from .asks import Ask, asks_in
 from .corpus import Outline
 from .report import _last_seq, segment_filename
-from .runlog import FINDING_VERDICTS, Run, Segment
+from .runlog import FINDING_VERDICTS, NOT_SELECTED, Run, Segment
 
 __all__ = [
     "Move",
@@ -297,19 +297,41 @@ def next_move(
             gaps = {
                 s.id: unjudged
                 for s in segments
-                if (unjudged := task_coverage(run, s, outline)[1])
+                if s.status != NOT_SELECTED and (unjudged := task_coverage(run, s, outline)[1])
             }
-            why = f"all {len(segments)} sections have been walked or accounted for"
+            selected = [s for s in segments if s.status != NOT_SELECTED]
+            excluded = [s for s in segments if s.status == NOT_SELECTED]
+            if excluded:
+                why = (
+                    f"all {len(selected)} selected section(s) have been walked or "
+                    "accounted for"
+                )
+            else:
+                why = f"all {len(segments)} sections have been walked or accounted for"
+            # Order matters more than it looks. "N task(s) across M of them" has
+            # to sit next to the sections it is talking about -- put the
+            # not-selected clause in between and "them" silently comes to mean
+            # the sections nobody walked, which is the opposite of the truth.
             if gaps:
                 total = sum(len(v) for v in gaps.values())
                 why += (
-                    f", but {total} task(s) across {len(gaps)} of them have no recorded "
-                    "verdict. Those tasks are unknown, not correct."
+                    f", but {total} task(s) across {len(gaps)} of the sections that were "
+                    "walked have no recorded verdict. Those tasks are unknown, not correct."
+                )
+            if excluded:
+                why += (
+                    f"{'' if gaps else '.'} Separately, {len(excluded)} of {len(segments)} "
+                    "sections were not selected for this run: never attempted, and "
+                    "unknown rather than correct."
                 )
             return Move(
                 "stop",
                 why=why,
-                detail={"reason": "complete", "unjudgedTasks": gaps},
+                detail={
+                    "reason": "complete",
+                    "unjudgedTasks": gaps,
+                    "notSelected": [s.id for s in excluded],
+                },
             )
         return Move("open", nxt.id, why=f"next unwalked section: {nxt.title}")
 
@@ -397,10 +419,17 @@ def next_move(
 def describe(run: Run, outline: Outline | None = None) -> str:
     """A one-screen answer to 'where is this walk?', for the console."""
     segments = run.segments()
-    done = sum(1 for s in segments if s.status in ("done", "blocked", "skipped"))
-    lines = [f"{done}/{len(segments)} sections accounted for"]
+    selected = [s for s in segments if s.status != NOT_SELECTED]
+    excluded = len(segments) - len(selected)
+    done = sum(1 for s in selected if s.status in ("done", "blocked", "skipped"))
+    head = f"{done}/{len(selected)} sections accounted for"
+    if excluded:
+        # Never folded into the numerator or the denominator. A scoped walk that
+        # reported "23/23" would be claiming exactly the thing it did not do.
+        head += f" ({excluded} not selected, still unknown)"
+    lines = [head]
     for seg in segments:
-        if seg.status == "pending":
+        if seg.status in ("pending", NOT_SELECTED):
             continue
         _, unjudged = task_coverage(run, seg, outline)
         note = ""

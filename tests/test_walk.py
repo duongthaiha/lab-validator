@@ -103,18 +103,32 @@ class FakeLab:
 
 class FakeOutline:
     """Real ``Segment`` objects on purpose. Faking them as dicts would let a
-    change to the segment contract pass this suite and fail on a live lab."""
+    change to the segment contract pass this suite and fail on a live lab.
 
-    def segments(self):
+    It wraps a real :class:`Outline` and delegates rather than reimplementing
+    it, for the same reason: the walk now reads task counts back off the outline
+    to build its review, and a double that answers only the methods yesterday's
+    code happened to call is a double that breaks the moment anything else asks.
+    """
+
+    def __init__(self):
         from lab_validator.corpus import Heading, Outline
 
-        headings = [
-            Heading(order=0, level=1, id="getting-started", text="Getting started"),
-            Heading(order=1, level=2, id="sign-in", text="Sign in"),
-            Heading(order=2, level=1, id="deploy-a-model", text="Deploy a model"),
-            Heading(order=3, level=2, id="pick-a-model", text="Pick a model"),
-        ]
-        return Outline(title=TITLE, headings=headings).segments()
+        self.outline = Outline(
+            title=TITLE,
+            headings=[
+                Heading(order=0, level=1, id="getting-started", text="Getting started"),
+                Heading(order=1, level=2, id="sign-in", text="Sign in"),
+                Heading(order=2, level=1, id="deploy-a-model", text="Deploy a model"),
+                Heading(order=3, level=2, id="pick-a-model", text="Pick a model"),
+            ],
+        )
+
+    def __getattr__(self, name):
+        return getattr(self.outline, name)
+
+    def segments(self):
+        return self.outline.segments()
 
     def anomalies(self):
         return []

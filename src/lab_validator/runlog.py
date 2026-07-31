@@ -42,6 +42,14 @@ from .taxonomy import (
 
 SCHEMA = "lab-validator/run-trace/v1"
 
+#: A section a human left out of this run's scope: never attempted, and
+#: therefore unknown rather than correct. Deliberately *not* ``skipped``, which
+#: already means "the walker passed over this mid-walk" and is set by
+#: ``lab_step.py --end-segment``. Selection lives in :mod:`lab_validator.scope`;
+#: the constant lives here because it is a segment status, and because scope
+#: imports the walk loop, which imports this module.
+NOT_SELECTED = "not_selected"
+
 #: Re-exported so callers keep importing the taxonomy from the writer that
 #: enforces it. The definitions live in :mod:`lab_validator.taxonomy`, which is
 #: the single source of truth; keeping a second copy here is what let ``LAB009``
@@ -139,7 +147,7 @@ class Segment:
     # pages, so a source line number is not stable across a run.
     start_heading: int | None = None
     end_heading: int | None = None
-    status: str = "pending"  # pending | in_progress | done | blocked | skipped
+    status: str = "pending"  # pending | in_progress | done | blocked | skipped | not_selected
     started: str | None = None
     ended: str | None = None
     lab_minutes_at_start: int | None = None
@@ -565,6 +573,13 @@ class Run:
                 "blocked": sum(1 for s in segments if s.get("status") == "blocked"),
                 "never_reached": [
                     s["id"] for s in segments if s.get("status") in (None, "pending")
+                ],
+                # Kept apart from never_reached on purpose. "We ran out of time"
+                # and "a human left it out of scope" are both unknown, but they
+                # have different causes and different readers, and a report that
+                # merges them loses the only useful thing either one says.
+                "not_selected": [
+                    s["id"] for s in segments if s.get("status") == NOT_SELECTED
                 ],
             },
         }

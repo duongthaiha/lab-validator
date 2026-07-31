@@ -137,6 +137,7 @@ Every exit prints a sentence. Match its opening words here.
 | `<move> <segment> came back N times and the run did not move on` | a mechanical command is failing silently | the message quotes what that command last printed — that is the diagnosis, not a hint to reproduce it |
 | `3 consecutive turns changed nothing in the run folder` | the model is not making progress on a named task | the message names the outstanding task; open that section by hand |
 | `reached the N-move ceiling before the lab ended` | budget exhausted | re-run with `--run <folder>` to continue, or raise `--max-turns` |
+| `all N selected sections are accounted for ... Separately, M were not selected` | a scoped walk finished its scope | expected; the report says `**Scoped run.**` and can never answer YES. Widen with `lab-validator scope --run <folder> --sections ...` and re-run `auto --run <folder>` |
 
 The two stall stops both end with the same sentence, and it is the important
 one: *sections already walked keep their reports; the rest are unknown, not
@@ -171,12 +172,31 @@ An unattended walk that cannot finish should stop rather than spend.
 | `--max-turns` | 200 | mechanical moves and model turns share the ceiling, so a loop that thrashes cannot run forever |
 | `--turn-timeout` | 900s | a lab step is not a chat reply; the SDK's own default of 60s is far too short |
 | `--model` | `auto` | pinning a model name means eventually validating a lab with a dependency that has itself retired |
+| `--sections` | all | the cheapest budget of the four: walking 3 sections of 23 costs a twentieth of the time. Ranges use `..` (`s04..s06`), because section ids contain hyphens |
+
+`--sections` is the one budget that changes what the report *means* rather than
+how far it gets, so it is also the one the report announces. A scoped `auto` run
+prints `**Scoped run.**` beside the verdict and cannot return YES — see
+[Reviewing what you got, and choosing what to walk](../README.md#reviewing-what-you-got-and-choosing-what-to-walk).
+
+Without `--sections`, `auto` walks everything. It never prompts: stdin under the
+SDK is not a terminal, and a prompt nobody can answer would hang an unattended
+run forever. The manifest records `how: "default"` in that case rather than
+`"prompt"`, so a walk nobody scoped is never later read as a walk somebody
+approved.
 
 `--run <folder>` drives a run that already exists instead of starting one, so an
 interrupted walk resumes rather than restarting:
 
 ```powershell
 lab-validator auto --run runs/2026-07-31T1448Z
+```
+
+To review and narrow first, then let the agent walk only what you chose:
+
+```powershell
+lab-validator scope --run runs/2026-07-31T1448Z                    # read the review
+lab-validator auto  --run runs/2026-07-31T1448Z --sections s04..s06
 ```
 
 Without `--run`, `auto` starts a walk and then identifies the run it just made

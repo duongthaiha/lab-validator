@@ -313,6 +313,66 @@ the report prints a **ledger** of which learner-path controls were never
 exercised. "The button works" is then a claim with evidence behind it rather
 than an assumption.
 
+### Reviewing what you got, and choosing what to walk
+
+Walking 23 sections took 6 217 steps and about a day. Nobody wants to pay that
+to re-check one section they just edited. So after the capture — instructions
+segmented, credentials in the vault, preflight done — `walk` stops and shows you
+what it found before it spends anything.
+
+```
+────────────── REVIEW ──────────────
+WorkshopPLUS - Azure AI Platform and Services
+run:  runs/2026-07-30T0749Z        review: runs/2026-07-30T0749Z/review.md
+preflight: 2 failed of 9 checks    credentials: 4 captured
+
+  s01-deploy-models          Deploy models              6 tasks
+  s02-bing-connections       Bing connections           4 tasks
+  ...
+  s22-semantic-kernel        Semantic Kernel & AutoGen  ? tasks
+
+Sections to walk? [all | s01,s04 | s04..s06 | ? for the full review]
+```
+
+Answer, or skip the prompt entirely:
+
+```powershell
+lab-validator walk --url "<lab url>" --name "<lab title>" --sections s04..s06
+lab-validator auto --url "<lab url>" --name "<lab title>" --sections all
+```
+
+Ranges use `..`, not `-`, because section ids contain hyphens (`s04-deploy-models`)
+and `s04-s06` is indistinguishable from an id. Get it wrong and it tells you:
+a typo that silently selects nothing would be worse than a refusal.
+
+You can also review an existing run without walking it, or widen a run later:
+
+```powershell
+lab-validator scope --run runs/2026-07-30T0749Z                       # read-only
+lab-validator scope --run runs/2026-07-30T0749Z --sections s01,s04..s06
+```
+
+Re-scoping only ever **widens**. A section already walked is evidence, so
+`scope` refuses to un-walk `done`, `blocked` or `in_progress` and says which it
+refused. `runs/<ts>/review.md` holds the full version — credentials by label,
+scope and shape only, never values, because it is a text artefact you may well
+paste into a bug.
+
+**The half that matters more than the selection.** A scoped run reports a
+different fact from a full one, and it says so:
+
+- `**Scoped run.**` sits next to the completability verdict, and a scoped run
+  **can never answer YES** — it did not look at the rest.
+- Coverage counts against what you chose (`3 of 3 selected sections completed`)
+  and names what you didn't (`20 of 23 sections were not selected`).
+- Unselected sections get their own warning, kept separate from *never reached*.
+  Never reached is a walk that ran out of road; not selected is a decision
+  somebody made. Same ignorance, different cause, different thing to do.
+
+No prompt appears when stdin is not a terminal — CI and unattended `auto` runs
+walk everything, as they always did, and the manifest records that nobody was
+asked rather than implying somebody approved.
+
 ### The rest of the commands
 
 `lab-validator` is a front door over the scripts, which all still work directly.
@@ -481,6 +541,7 @@ scripts/agent_smoke.py              exercise the agent's SDK wiring with no lab
 
 src/lab_validator/cli.py            `lab-validator` front door; the walk command
 src/lab_validator/walkloop.py       what to do next, and the refusals that matter
+src/lab_validator/scope.py          review, then choose which sections to walk
 src/lab_validator/agent.py          `auto`: the loop driven by a model, on a leash
 src/lab_validator/runlog.py         run folder, append-only trace, resume, redaction
 src/lab_validator/taxonomy.py       verdict codes and the instruction/setup domain axis

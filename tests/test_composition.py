@@ -13,12 +13,13 @@ real APIs, with no browser. It asserts about the *joins* rather than the parts.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lab_validator import cli, walkloop  # noqa: E402
+from lab_validator import cli, scope, walkloop  # noqa: E402
 from lab_validator.corpus import Heading, Outline  # noqa: E402
 from lab_validator.report import render, write_segment  # noqa: E402
 from lab_validator.runlog import Run, Segment  # noqa: E402
@@ -217,3 +218,100 @@ def test_a_run_from_an_older_version_is_still_readable(tmp_path):
 
     assert run.segment("s01").get("reported_through") is None
     assert walkloop.next_move(run, outline).action == "advance"
+
+
+# --- does a selection survive the whole chain? -----------------------------
+
+
+def _two_section_run(tmp_path):
+    """Two sections, so that scoping to one leaves something unwalked."""
+    md = tmp_path / "outline.md"
+    md.write_text(BODY + "\n# Clean up\n### 1. Delete the group\nDelete it.\n",
+                  encoding="utf-8")
+    outline = Outline(title="Demo Lab", headings=[
+        Heading(order=0, level=1, id="sign-in", text="Sign in"),
+        Heading(order=1, level=3, id="1-open-the-portal", text="1. Open the portal"),
+        Heading(order=2, level=3, id="2-deploy-the-model", text="2. Deploy the model"),
+        Heading(order=3, level=1, id="clean-up", text="Clean up"),
+        Heading(order=4, level=3, id="1-delete-the-group", text="1. Delete the group"),
+    ])
+    run = Run.create(
+        tmp_path / "runs", "Demo Lab", lab={"id": 1}, instance="i", agent="test",
+        corpus=md, segments=outline.segments(),
+    )
+    outline.save(run.dir / "outline.json")
+    return run, outline
+
+
+def test_a_selection_survives_from_scope_through_next_to_the_report(tmp_path):
+    """The join this feature lives or dies on. Selection is written by one
+    module, obeyed by a second and counted by a third, and each of them is
+    unit-tested against its own idea of what an excluded section looks like."""
+    run, outline = _two_section_run(tmp_path)
+    chosen = run.segments()[0].id
+    other = run.segments()[1].id
+
+    scope.select(run, chosen, outline=outline, interactive=False)
+
+    reopened = Run.open(run.dir)
+    move = walkloop.next_move(reopened, outline)
+    assert move.action == "open" and move.segment_id == chosen
+
+    reopened.end_segment(chosen, "done")
+    assert walkloop.next_move(reopened, outline).action == "stop"
+
+    body = render(Run.open(run.dir), outline)
+    assert "1 of 2 sections were not selected for this run." in body
+    assert "**YES**" not in body, (
+        "one of two sections walked cannot answer whether the lab is completable"
+    )
+    assert other in {s.id for s in Run.open(run.dir).segments()
+                     if s.status == "not_selected"}
+
+
+def test_the_run_folder_alone_carries_the_selection(tmp_path):
+    """A multi-hour walk gets interrupted. If the scope lived in memory or in a
+    flag, resuming would quietly widen it back to everything."""
+    run, outline = _two_section_run(tmp_path)
+    scope.select(run, run.segments()[0].id, outline=outline, interactive=False)
+
+    resumed = Run.open(run.dir)
+
+    assert [s.status for s in resumed.segments()] == ["pending", "not_selected"]
+    assert resumed.manifest["selections"][-1]["how"] == "flag"
+
+# --- pointing --run at the folder of folders -------------------------------
+
+
+def test_a_runs_root_passed_as_a_run_is_refused_by_name(tmp_path, capsys):
+    """`--run` and `--runs` sit next to each other and mean opposite things, so
+    this is the mistake people actually make. It used to exit with a traceback,
+    which reads as a crash rather than as a typo."""
+    run, _ = _two_section_run(tmp_path)
+    root = run.dir.parent
+
+    code = cli.cmd_scope(argparse.Namespace(run=str(root), runs=None, sections=None))
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "looks like a runs root" in err
+    assert run.dir.name in err, "naming the candidate is the whole point of refusing"
+
+
+def test_the_same_refusal_serves_next(tmp_path, capsys):
+    """Two commands, one mistake. Different wording for the same error would
+    read as two different problems."""
+    run, _ = _two_section_run(tmp_path)
+
+    code = cli.cmd_next(argparse.Namespace(run=str(run.dir.parent), runs=None))
+
+    assert code == 2
+    assert "looks like a runs root" in capsys.readouterr().err
+
+
+def test_a_real_run_folder_still_opens(tmp_path):
+    """The refusal must not fire on the path that works."""
+    run, _ = _two_section_run(tmp_path)
+    assert cli.cmd_scope(
+        argparse.Namespace(run=str(run.dir), runs=None, sections=None)
+    ) == 0

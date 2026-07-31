@@ -514,7 +514,7 @@ def test_auto_refuses_when_it_cannot_tell_which_run_it_just_made(tmp_path, monke
 
     monkeypatch.setattr(cli, "cmd_walk", two_runs)
     args = argparse.Namespace(run=None, runs=str(runs), model="m", max_turns=1,
-                              turn_timeout=1.0)
+                              turn_timeout=1.0, sections=None)
 
     assert cli.cmd_auto(args) == 2
     said = capsys.readouterr().err
@@ -546,7 +546,7 @@ def test_auto_drives_the_run_the_walk_just_created(tmp_path, monkeypatch):
     monkeypatch.setattr("lab_validator.runlog.Run.open", lambda d: _FakeRun(d))
 
     args = argparse.Namespace(run=None, runs=str(runs), model="m", max_turns=1,
-                              turn_timeout=1.0)
+                              turn_timeout=1.0, sections=None)
 
     assert cli.cmd_auto(args) == 0
     assert driven["dir"].name == "aa-this-walk"
@@ -566,7 +566,7 @@ def test_auto_does_not_walk_again_when_given_a_run(tmp_path, monkeypatch):
     monkeypatch.setattr("lab_validator.runlog.Run.open", lambda d: _FakeRun(d))
 
     args = argparse.Namespace(run=str(existing), runs=None, model="m", max_turns=1,
-                              turn_timeout=1.0)
+                              turn_timeout=1.0, sections=None)
 
     assert cli.cmd_auto(args) == 0
     assert walked == [], "resuming must not start a second walk"
@@ -585,7 +585,7 @@ def test_auto_reports_a_missing_sdk_without_a_traceback(tmp_path, monkeypatch, c
 
     monkeypatch.setattr("lab_validator.agent.walk_autonomously", unavailable)
     args = argparse.Namespace(run=str(existing), runs=None, model="m", max_turns=1,
-                              turn_timeout=1.0)
+                              turn_timeout=1.0, sections=None)
 
     assert cli.cmd_auto(args) == 3
     assert "walk it yourself" in capsys.readouterr().err
