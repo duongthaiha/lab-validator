@@ -17,24 +17,31 @@ The trace is the product; this renders it. Three rules shape the output:
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 
 from .corpus import Anomaly, Outline
 from .runlog import FINDING_VERDICTS, Run, Segment
-
-CODE_NAMES = {
-    "LAB000": "Environment transient (not a defect)",
-    "LAB001": "Retired or renamed model",
-    "LAB002": "Missing resource or SKU",
-    "LAB003": "Changed UI label or inconsistent structure",
-    "LAB004": "Moved navigation",
-    "LAB005": "Removed feature",
-    "LAB006": "Broken link",
-    "LAB007": "Timing or quota",
-    "LAB008": "Undocumented mandatory step",
-}
+from .taxonomy import CODE_NAMES
 
 SEVERITY_ICON = {"critical": "[!!]", "major": "[!]", "minor": "[~]", "info": "[i]"}
 SEVERITY_ORDER = {"critical": 0, "major": 1, "minor": 2, "info": 3}
+
+# Setup first, deliberately. Setup defects are the ones that do not announce
+# themselves -- a deployment named `gpt-4o` that serves something else, a
+# shipped `.env` with a valid URL of the wrong kind -- so they get misattributed
+# to five unrelated labs before anyone looks at the environment. They are also
+# usually a one-line fix by a different owner than the lab author.
+DOMAIN_ORDER = {"setup": 0, "instruction": 1, "undetermined": 2}
+DOMAIN_TITLE = {
+    "setup": "Setup defects — the environment cannot deliver what the text describes",
+    "instruction": "Instruction defects — the lab text is wrong",
+    "undetermined": "Unattributed — the evidence does not yet say which side is wrong",
+}
+DOMAIN_OWNER = {
+    "setup": "lab profile / image / subscription owner",
+    "instruction": "lab author",
+    "undetermined": "needs one more observation before it can be routed",
+}
 
 STATUS_WORD = {
     "done": "walked to the end",
@@ -43,6 +50,108 @@ STATUS_WORD = {
     "in_progress": "*still in progress*",
     "pending": "*not started*",
 }
+
+COMPLETABILITY_WORD = {
+    "no": "**NO** — a learner cannot complete this as written",
+    "partially": "**PARTIALLY** — reachable, but not by following the instructions as written",
+    "yes": "**YES** — a learner following the instructions can complete this",
+    "unknown": "**UNKNOWN** — too little was walked to answer",
+}
+
+
+@dataclass(frozen=True)
+class Completability:
+    """The one question every reader opens the report to answer.
+
+    Today this lives in prose -- *"two structural defects gate the entire
+    workshop"* -- which is true, well argued, and unreadable by anything but a
+    human. Deriving it from the trace makes it comparable across runs and
+    forces the report to name the evidence that gates the lab.
+    """
+
+    verdict: str
+    blockers: list[dict]
+
+    @property
+    def word(self) -> str:
+        return COMPLETABILITY_WORD[self.verdict]
+
+
+def completability(
+    findings: list[dict], blocked: list[dict], *, all_walked: bool
+) -> Completability:
+    """Decide, structurally, whether a learner could get through.
+
+    A blocker is something that stops *every* learner: a section that could not
+    be walked at all, or a critical finding. ``DEFERRED`` is not a blocker --
+    it records that the walker chose to come back later, which says nothing
+    about the lab.
+
+    Absence of evidence is never a yes: if any section went unwalked the honest
+    answer is that we do not know, because unreached content is unknown, not
+    correct.
+    """
+    gates = [s for s in blocked if s.get("verdict") == "BLOCKED"]
+    gates += [f for f in findings if f.get("severity") == "critical"]
+    gates.sort(key=lambda s: s.get("seq", 0))
+    if gates:
+        return Completability("no", gates)
+    if any(f.get("severity") == "major" for f in findings):
+        return Completability("partially", [])
+    if not all_walked:
+        return Completability("unknown", [])
+    return Completability("yes", [])
+
+
+def render_blockers(add, verdict: Completability, label: dict[int, str] | None = None) -> None:
+    """A blocked run has found the most important thing there is to find.
+
+    So it is printed up front, with its evidence, rather than as a footnote
+    after the passes -- otherwise a run that discovered the lab is unusable
+    reads as a run that failed to finish.
+    """
+    if not verdict.blockers:
+        return
+    add("## Blockers")
+    add("")
+    add("These stop a learner outright. Everything after this point was "
+        "observed either before the block or around it.")
+    add("")
+    for s in verdict.blockers:
+        where = f" *({label[s['seq']]})*" if label and s.get("seq") in label else ""
+        code = s.get("verdict", "BLOCKED")
+        name = CODE_NAMES.get(code, code)
+        why = s.get("note") or s.get("observed") or "no reason recorded"
+        add(f"- **{name}** `{code}`{where} — {why}")
+        add(f"  <br>evidence: step `{s.get('seq')}`"
+            + (f", instruction `{s['instructionRef']}`" if s.get("instructionRef") else ""))
+    add("")
+
+
+def render_domain_routing(add, findings: list[dict]) -> None:
+    """Split the findings by who has to fix them.
+
+    Instruction and setup defects have different owners and different fixes,
+    and the numbering is left alone on purpose -- a finding that changes number
+    between runs cannot be tracked, so this routes by reference instead of by
+    re-ordering.
+    """
+    if not findings:
+        return
+    grouped: dict[str, list[str]] = defaultdict(list)
+    for i, f in enumerate(findings, 1):
+        domain = f.get("domain") or "undetermined"
+        name = CODE_NAMES.get(f["verdict"], f["verdict"])
+        grouped[domain].append(f"**#{i}** {name} (`{f['verdict']}`)")
+    add("### Who fixes what")
+    add("")
+    for domain in sorted(grouped, key=lambda d: DOMAIN_ORDER.get(d, 9)):
+        add(f"**{DOMAIN_TITLE.get(domain, domain)}** — {DOMAIN_OWNER.get(domain, 'unknown owner')}")
+        add("")
+        for line in grouped[domain]:
+            add(f"- {line}")
+        add("")
+
 
 
 def is_confirmation(step: dict) -> bool:
@@ -114,9 +223,16 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
         + (f", {heartbeats} heartbeat(s)" if heartbeats else "")
         + f", {len(findings)} finding(s)")
     add("")
+
+    blocked_steps = [s for s in steps if s.get("verdict") in ("BLOCKED", "DEFERRED")]
+    verdict = completability(findings, blocked_steps, all_walked=segment.status == "done")
+    add(f"**Can a learner finish this section?** {verdict.word}")
+    add("")
     if segment.note:
         add(f"> {segment.note}")
         add("")
+
+    render_blockers(add, verdict)
 
     if outline is not None and segment.anchor:
         head = outline.section_by_anchor(segment.anchor)
@@ -143,6 +259,7 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
         counts = Counter(s["verdict"] for s in findings)
         add(" · ".join(f"**{v}** ×{n}" for v, n in sorted(counts.items())))
         add("")
+        render_domain_routing(add, findings)
         for i, f in enumerate(findings, 1):
             sev = f.get("severity", "minor")
             icon = SEVERITY_ICON.get(sev, "[~]")
@@ -151,7 +268,9 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
             add("")
             if f.get("instructionRef"):
                 add(f"*Instruction:* `{f['instructionRef']}`  ")
-            add(f"*Severity:* {sev} · *Step:* `{f['seq']}` · *{f.get('ts', '')}*")
+            domain = f.get("domain") or "undetermined"
+            add(f"*Severity:* {sev} · *At fault:* {domain} · "
+                f"*Step:* `{f['seq']}` · *{f.get('ts', '')}*")
             add("")
             if f.get("instructionText"):
                 add("**The lab says**")
@@ -179,12 +298,14 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
             add(f"- {s['note']}")
     add("")
 
-    blocked = [s for s in steps if s.get("verdict") in ("BLOCKED", "DEFERRED")]
-    if blocked:
-        add("## Blocked and deferred")
+    deferred = [s for s in steps if s.get("verdict") == "DEFERRED"]
+    if deferred:
+        add("## Deferred")
         add("")
-        for s in blocked:
-            add(f"- `{s['verdict']}` {s.get('note', 'no reason recorded')}")
+        add("_Postponed by the walk, not by the lab. These say nothing about the lab._")
+        add("")
+        for s in deferred:
+            add(f"- {s.get('note', 'no reason recorded')}")
         add("")
 
     transients = [s for s in steps if s.get("verdict") == "LAB000"]
@@ -261,6 +382,32 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         "list of failures alone cannot distinguish a checked step from a skipped one.")
     add("")
 
+    # ---- the headline question ------------------------------------------
+    retracted = run.retracted()
+    findings = run.findings()
+    findings.sort(key=lambda s: (SEVERITY_ORDER.get(s.get("severity", "minor"), 9), s["seq"]))
+    all_walked = (
+        summary["segments"]["done"] == summary["segments"]["total"]
+        and not summary["segments"]["never_reached"]
+    )
+    blocked_steps = [s for s in steps if s.get("verdict") in ("BLOCKED", "DEFERRED")]
+    verdict = completability(findings, blocked_steps, all_walked=all_walked)
+    seg_title = {s["id"]: s.get("title", s["id"]) for s in segments}
+    where = {
+        s["seq"]: seg_title.get(s.get("segment"), s.get("segment", ""))
+        for s in steps
+        if s.get("seq") is not None
+    }
+    add("## Can a learner complete this lab?")
+    add("")
+    add(verdict.word)
+    add("")
+    if not all_walked and verdict.verdict != "unknown":
+        add("> Scoped to what was walked. Sections that were never reached are "
+            "unknown, not correct — see Coverage.")
+        add("")
+    render_blockers(add, verdict, where)
+
     # ---- coverage -------------------------------------------------------
     done = summary["segments"]["done"]
     total = summary["segments"]["total"]
@@ -272,7 +419,6 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     add("")
     add("| Section | Module | Status | Steps | Findings | Report |")
     add("|---|---|---|---|---|---|")
-    retracted = run.retracted()
     for seg in segments:
         rows = by_segment.get(seg["id"], [])
         finds = sum(
@@ -295,8 +441,6 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         add("")
 
     # ---- findings -------------------------------------------------------
-    findings = run.findings()
-    findings.sort(key=lambda s: (SEVERITY_ORDER.get(s.get("severity", "minor"), 9), s["seq"]))
     add("## Findings")
     add("")
     if not findings:
@@ -306,6 +450,7 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         counts = Counter(s["verdict"] for s in findings)
         add(" · ".join(f"**{v}** ×{n}" for v, n in sorted(counts.items())))
         add("")
+        render_domain_routing(add, findings)
         for i, f in enumerate(findings, 1):
             sev = f.get("severity", "minor")
             icon = SEVERITY_ICON.get(sev, "[~]")
@@ -316,7 +461,7 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
             add(f"*Section:* {seg.get('title', f['segment'])}  ")
             if f.get("instructionRef"):
                 add(f"*Instruction:* `{f['instructionRef']}`  ")
-            add(f"*Severity:* {sev}")
+            add(f"*Severity:* {sev} · *At fault:* {f.get('domain') or 'undetermined'}")
             add("")
             if f.get("instructionText"):
                 add("**The lab says**")
@@ -359,14 +504,16 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
             add(f"- **{seg.get('title', s['segment'])[:40]}** — {s['note']}")
     add("")
 
-    # ---- blocked / deferred --------------------------------------------
-    blocked = [s for s in steps if s["verdict"] in ("BLOCKED", "DEFERRED")]
-    if blocked:
-        add("## Blocked and deferred")
+    # ---- deferred --------------------------------------------------------
+    deferred = [s for s in steps if s["verdict"] == "DEFERRED"]
+    if deferred:
+        add("## Deferred")
         add("")
-        for s in blocked:
+        add("_Postponed by the walk, not by the lab. Blockers are reported up front._")
+        add("")
+        for s in deferred:
             seg = next((x for x in segments if x["id"] == s["segment"]), {})
-            add(f"- `{s['verdict']}` **{seg.get('title', s['segment'])[:40]}** — "
+            add(f"- **{seg.get('title', s['segment'])[:40]}** — "
                 f"{s.get('note', 'no reason recorded')}")
         add("")
 

@@ -43,7 +43,7 @@ from lab_validator.imaging import (  # noqa: E402
 )
 from lab_validator.labclient import LabClient  # noqa: E402
 from lab_validator.report import write_segment  # noqa: E402
-from lab_validator.runlog import FINDING_VERDICTS, Run  # noqa: E402
+from lab_validator.runlog import DOMAINS, FINDING_VERDICTS, Run  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
@@ -315,7 +315,8 @@ async def main_async(args) -> int:
 
             if args.note:
                 run.step(args.segment, verdict=args.verdict, severity=args.severity,
-                         note=args.note, instruction_ref=args.ref, surface="analysis")
+                         note=args.note, instruction_ref=args.ref, domain=args.domain,
+                         surface="analysis")
                 if args.verdict in FINDING_VERDICTS:
                     findings += 1
             report = refresh_section_report(run, args.segment)
@@ -356,7 +357,8 @@ def record_only(args, lab_minutes: int | None = None) -> int:
     finding = 0
     if args.note:
         run.step(segment, verdict=args.verdict, severity=args.severity,
-                 note=args.note, instruction_ref=args.ref, surface="analysis")
+                 note=args.note, instruction_ref=args.ref, domain=args.domain,
+                 surface="analysis")
         finding = 1 if args.verdict in FINDING_VERDICTS else 0
 
     if args.end_segment:
@@ -395,6 +397,10 @@ def main() -> int:
     p.add_argument("--note", help="record an observation as its own trace record")
     p.add_argument("--verdict", default="PASS", help="verdict for --note")
     p.add_argument("--severity", help="severity for --note")
+    p.add_argument("--domain", choices=DOMAINS,
+                   help="which side is at fault: the lab text (instruction) or the "
+                        "environment (setup). Findings default to 'undetermined' -- "
+                        "leave it there unless the evidence settles it.")
     p.add_argument("--ref", help="instruction anchor for --note, e.g. #setup-env-file")
     p.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
     args = p.parse_args()

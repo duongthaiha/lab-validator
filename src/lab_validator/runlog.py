@@ -33,37 +33,20 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
+from .taxonomy import (
+    DOMAINS,
+    FINDING_VERDICTS,
+    SEVERITIES,
+    VERDICTS,
+)
+
 SCHEMA = "lab-validator/run-trace/v1"
 
-#: Terminal verdicts for a step.
-#:
-#: ``PASS`` is as important as any failure code: a differ with no positive
-#: evidence cannot tell "verified correct" from "never reached", and those two
-#: must never collapse into one another.
-VERDICTS = (
-    "PASS",
-    "LAB000",  # environment transient -- recorded, never reported as a finding
-    "LAB001",  # retired / renamed model
-    "LAB002",  # missing resource or SKU
-    "LAB003",  # changed UI label
-    "LAB004",  # moved navigation
-    "LAB005",  # removed feature
-    "LAB006",  # broken link
-    "LAB007",  # timing / quota -- includes "this step never finishes"
-    "LAB008",  # undocumented mandatory step
-    "LAB009",  # defective sample code -- swallows failure or produces no output
-    "BLOCKED",  # a dependency failed, so this could not be attempted
-    "DEFERRED",  # deliberately not attempted; requires a justification
-)
-
-SEVERITIES = ("critical", "major", "minor", "info")
-
-#: Verdicts that represent a real, learner-facing defect.
-#: Derived by name rather than by slice index so that adding a code to
-#: ``VERDICTS`` cannot silently drop the last one out of the finding set.
-FINDING_VERDICTS = frozenset(
-    v for v in VERDICTS if v.startswith("LAB") and v != "LAB000"
-)
+#: Re-exported so callers keep importing the taxonomy from the writer that
+#: enforces it. The definitions live in :mod:`lab_validator.taxonomy`, which is
+#: the single source of truth; keeping a second copy here is what let ``LAB009``
+#: be accepted by this module and stay nameless in the report for 40 findings.
+__all_taxonomy__ = ("VERDICTS", "SEVERITIES", "FINDING_VERDICTS", "DOMAINS")
 
 
 def _is_judgement(step: dict) -> bool:
@@ -311,20 +294,31 @@ class Run:
         images: list[Path | str] | None = None,
         severity: str | None = None,
         note: str | None = None,
+        domain: str | None = None,
         **extra: Any,
     ) -> dict:
         """Append one trace record and return it.
 
-        ``verdict`` and ``severity`` are validated rather than free text: a
-        typo'd verdict would silently vanish from every report that groups by
-        it, which is the worst possible failure mode for a differ.
+        ``verdict``, ``severity`` and ``domain`` are validated rather than free
+        text: a typo'd verdict would silently vanish from every report that
+        groups by it, which is the worst possible failure mode for a differ.
+
+        ``domain`` says which side is at fault -- the instructions or the lab
+        setup -- and therefore who fixes it. A finding must establish it or
+        admit ``undetermined``; guessing sends the defect to an owner who
+        correctly rejects it, and the finding then dies. Findings default to
+        ``undetermined`` rather than to a guess.
         """
         if verdict not in VERDICTS:
             raise ValueError(f"unknown verdict {verdict!r}; expected one of {VERDICTS}")
         if severity is not None and severity not in SEVERITIES:
             raise ValueError(f"unknown severity {severity!r}; expected one of {SEVERITIES}")
+        if domain is not None and domain not in DOMAINS:
+            raise ValueError(f"unknown domain {domain!r}; expected one of {DOMAINS}")
         if verdict == "DEFERRED" and not note:
             raise ValueError("DEFERRED requires a note justifying why it was not attempted")
+        if verdict in FINDING_VERDICTS and domain is None:
+            domain = "undetermined"
 
         self._seq += 1
         record: dict[str, Any] = {
@@ -334,6 +328,8 @@ class Run:
             "verdict": verdict,
             "surface": surface,
         }
+        if domain:
+            record["domain"] = domain
         if instruction_ref:
             record["instructionRef"] = instruction_ref
         if instruction_text:

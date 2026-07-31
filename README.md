@@ -157,6 +157,43 @@ was never written. `gap-analysis.md` is the roll-up and links to each of them.
 Reports are rendered from the trace each time, never appended to — which is why
 a retraction removes a finding cleanly instead of needing an erratum.
 
+Every report opens with the question a reader actually has — **can a learner
+complete this: YES / NO / PARTIALLY / UNKNOWN** — followed by the blockers and
+their evidence, before coverage and before the findings list. A blocked run has
+found the most important thing there is to find, so it must not read as a run
+that failed to finish. Absence of evidence is never a YES: if any section went
+unwalked the answer is UNKNOWN, because unreached content is unknown rather
+than correct.
+
+Findings carry two independent axes. The `LABnnn` **code** says what kind of
+defect it is; the **domain** says who has to fix it:
+
+| Domain | Meaning | Owner |
+|---|---|---|
+| `instruction` | the text is wrong — retired model, renamed blade, dead link | lab author |
+| `setup` | the text is right, the environment cannot deliver it | lab profile / image / subscription owner |
+| `undetermined` | the evidence does not yet settle which side is wrong | needs one more observation |
+
+They have to be orthogonal because the same code falls both ways: a missing
+resource is a *setup* defect if the lab should have provisioned it, and an
+*instruction* defect if the text names a SKU that never existed. This is not
+academic — the two most damaging findings in run 003 were setup defects with
+innocent instructions (deployments *named* `gpt-4o` that serve `gpt-5-mini`; a
+shipped `.env` wrong in two ways, breaking five labs). Neither is visible in
+the lab text. `undetermined` is a first-class value and the correct default:
+guessing wrong sends a defect to an owner who correctly rejects it, and then it
+dies.
+
+```powershell
+python scripts/lab_step.py --segment s08 --note "the shipped .env points at an operation URL" `
+  --verdict LAB009 --severity major --domain setup
+```
+
+The codes themselves live in one module, `src/lab_validator/taxonomy.py`, with a
+test asserting every finding code has a name, a definition and a default
+severity — because they previously lived in three places that disagreed, and 40
+findings rendered with no name at all while nothing failed.
+
 `--retract` matters as much as the rest: run 003 withdrew 6 of 36 findings. A
 validator that never withdraws anything is not checking itself.
 

@@ -16,6 +16,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lab_validator.report import (  # noqa: E402
+    completability,
+    render,
     render_segment,
     segment_filename,
     write_segment,
@@ -174,3 +176,110 @@ def test_writing_is_idempotent(tmp_path):
     first = write_segment(run, section(run, "s00")).read_text(encoding="utf-8")
     second = write_segment(run, section(run, "s00")).read_text(encoding="utf-8")
     assert first == second
+
+
+# --- the headline question -------------------------------------------------
+#
+# "Can a learner complete this lab" is the reason anyone opens the report. It
+# used to live in prose ("two structural defects gate the entire workshop") --
+# true, well argued, and unreadable by anything but a human.
+
+
+def test_a_blocked_section_means_the_lab_cannot_be_completed():
+    verdict = completability([], [{"verdict": "BLOCKED", "seq": 3, "note": "no quota"}],
+                             all_walked=True)
+    assert verdict.verdict == "no"
+    assert verdict.blockers[0]["note"] == "no quota"
+
+
+def test_a_critical_finding_gates_the_lab():
+    verdict = completability([{"verdict": "LAB001", "severity": "critical", "seq": 9}], [],
+                             all_walked=True)
+    assert verdict.verdict == "no"
+
+
+def test_deferred_is_not_a_blocker():
+    """DEFERRED records that the walker chose to come back later. That is a
+    fact about the walk, not about the lab."""
+    verdict = completability([], [{"verdict": "DEFERRED", "seq": 2, "note": "slow, retry"}],
+                             all_walked=True)
+    assert verdict.verdict == "yes"
+    assert verdict.blockers == []
+
+
+def test_major_findings_mean_partially():
+    verdict = completability([{"verdict": "LAB003", "severity": "major", "seq": 1}], [],
+                             all_walked=True)
+    assert verdict.verdict == "partially"
+
+
+def test_an_unfinished_walk_never_claims_yes():
+    """Unreached content is unknown, not correct."""
+    assert completability([], [], all_walked=False).verdict == "unknown"
+    assert completability([], [], all_walked=True).verdict == "yes"
+
+
+def test_blockers_are_reported_before_coverage(tmp_path):
+    """A run that found the lab unusable has found the most important thing
+    there is to find. It must not read as a run that failed to finish."""
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    run.step("s00", verdict="BLOCKED", note="deployment quota is zero in every region")
+    run.end_segment("s00", "blocked")
+    text = render(run)
+    assert "## Blockers" in text
+    assert "deployment quota is zero" in text
+    assert text.index("## Blockers") < text.index("## Coverage")
+    assert text.index("Can a learner complete this lab?") < text.index("## Blockers")
+
+
+def test_the_section_report_answers_completability(tmp_path):
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    run.step("s00", verdict="BLOCKED", note="the portal never loaded")
+    text = render_segment(run, section(run, "s00"))
+    assert "Can a learner finish this section?" in text
+    assert "**NO**" in text
+    assert "## Blockers" in text
+
+
+# --- routing by domain -----------------------------------------------------
+
+
+def test_findings_are_routed_to_the_owner_who_can_fix_them(tmp_path):
+    """An instruction defect is edited by the lab author; a setup defect is
+    fixed by whoever owns the image. Sending one to the other gets it
+    correctly rejected, and then it dies."""
+    run = make_run(tmp_path)
+    run.step("s00", verdict="LAB003", severity="major", domain="instruction",
+             note="the blade is now called 'Deployments + endpoints'")
+    run.step("s00", verdict="LAB009", severity="major", domain="setup",
+             note="the shipped .env points at an operation URL")
+    text = render_segment(run, section(run, "s00"))
+    routing = text.split("### Who fixes what")[1].split("### 1.")[0]
+    assert "lab author" in routing
+    assert "lab profile / image / subscription owner" in routing
+    assert routing.index("subscription owner") < routing.index("lab author"), (
+        "setup defects go first -- they do not announce themselves"
+    )
+
+
+def test_an_unattributed_finding_says_so_rather_than_guessing(tmp_path):
+    run = make_run(tmp_path)
+    run.step("s00", verdict="LAB002", severity="major", note="no such resource group")
+    text = render_segment(run, section(run, "s00"))
+    assert "*At fault:* undetermined" in text
+    assert "Unattributed" in text
+
+
+def test_numbering_is_stable_across_domains(tmp_path):
+    """Routing must not re-order the findings: a finding that changes number
+    between runs cannot be tracked."""
+    run = make_run(tmp_path)
+    run.step("s00", verdict="LAB001", severity="critical", domain="instruction",
+             note="first by severity")
+    run.step("s00", verdict="LAB009", severity="minor", domain="setup", note="last by severity")
+    text = render_segment(run, section(run, "s00"))
+    assert text.index("first by severity") < text.index("last by severity")
+    assert "**#1**" in text.split("### Who fixes what")[1]
+

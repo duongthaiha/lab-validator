@@ -717,7 +717,8 @@ Keep the `LAB001`–`LAB007` codes (retired model, missing resource/SKU, changed
 moved navigation, removed feature, broken link, timing/quota). Emit **SARIF 2.1.0** with
 `partialFingerprints` so findings are stable across runs and dedupe in GitHub code scanning.
 The instruction file and line become the SARIF `location` — which is what makes this
-actionable for whoever maintains the lab content.
+actionable for whoever maintains the lab content. Carry the `domain` (below) as a SARIF
+property so the routing survives the export.
 
 Run 002 surfaced a category the original taxonomy missed, so add:
 
@@ -731,6 +732,74 @@ Run 002 surfaced a category the original taxonomy missed, so add:
   reported. Silently dropping them loses the evidence that the run was noisy; promoting them
   to findings destroys precision. This code is how the differ stays honest about the
   difference.
+
+Run 003 — the full 23-section walk — surfaced one more, and one lesson about where a
+taxonomy should live:
+
+- **`LAB009` — defective sample code.** The lab ships code the learner is told to run, and
+  it does not work: a wrong path, a wrong endpoint shape, a package version that no longer
+  exposes the symbol the notebook imports. It became the **second-largest category in the
+  run (40 findings)** because a workshop built on notebooks fails through its own code far
+  more often than through its prose. It is distinct from `LAB001`–`LAB006`, all of which
+  describe the *product* drifting away from the *text*; here the lab's own artefact is
+  simply wrong, and the fix is a one-line edit to a file the lab owns.
+
+**Where the taxonomy lives is itself a lesson.** `LAB009` was accepted by the writer
+(`runlog`) and unknown to the reader (`report`), whose `CODE_NAMES` stopped at `LAB008`. No
+document defined it. The consequence was silent: 40 findings — the second-largest category —
+rendered in the deliverable as `` LAB009 — `LAB009` ``, with no human-readable name, and
+nothing failed. Three sources of truth that disagree will always drift, and a *report* is
+the worst place to discover it, because a degraded render still looks like a report.
+
+So the codes now live in exactly one module, `src/lab_validator/taxonomy.py`, carrying code,
+name, definition, default severity, is-finding and typical domain; `runlog` and `report`
+import it and neither keeps a copy. A test asserts every finding code is fully documented,
+so **adding a code without defining it fails CI rather than degrading a report nobody
+re-reads**. Generalises to: *if a value is written by one module and rendered by another,
+the vocabulary is a shared asset, not a local constant.*
+
+#### The `domain` axis — which side is wrong
+
+The `LABnnn` code says *what kind* of defect. It does not say **who has to fix it**, and
+those are different questions with different owners:
+
+- an **instruction** defect means the text is wrong — the lab author edits text;
+- a **setup** defect means the text is right but the environment cannot deliver — the lab
+  profile / image / subscription owner fixes the environment.
+
+The axis has to be orthogonal to the code, because the *same code falls both ways*.
+`LAB002 missing resource` is a setup defect if the lab should have provisioned it, and an
+instruction defect if the text names a SKU that never existed. `LAB001` is an instruction
+defect if the doc names a dead model, and a setup defect if the subscription cannot deploy
+a live one.
+
+This matters because **the two most damaging findings in the whole workshop were setup
+defects where the instructions were innocent**: G-30 (deployments *named* `gpt-4o` that
+serve `gpt-5-mini`) and G-70/G-71 (the shipped `.env` wrong in two independent ways,
+breaking five labs). Neither is visible in the lab text; both are one-line environment
+fixes. And the distinction was *already being drawn by hand, in prose* — the gap analysis
+opens with "Not quota, not region, not transient" precisely because a reader needs to know
+which side is broken. It was essential, reasoned about every time, and invisible to the
+machine.
+
+**Rule: a finding must say which side is wrong, or be marked `undetermined` and state what
+evidence would settle it.** `undetermined` is a first-class, respectable value — guessing
+wrong sends the defect to an owner who correctly rejects it, and then it dies. G-08 took a
+deliberate experiment across a fresh subscription, a fresh resource and a second region to
+rule out quota, region and transience; that is the standard, not an inference from a single
+error message.
+
+#### Blocked is a result, and it belongs at the top
+
+A run that finds the lab blocked has found the most important thing there is to find, so
+the report opens with a structural **completability verdict** — can a learner complete this,
+YES / NO / PARTIALLY / UNKNOWN — followed by the blockers and their evidence, before
+coverage and before the findings list. Previously this lived in a prose paragraph ("two
+structural defects gate the entire workshop"): true, well argued, and unreadable by anything
+but a human. Two properties are deliberate: **absence of evidence is never a YES** (if any
+section went unwalked the answer is UNKNOWN, because unreached content is unknown rather
+than correct), and **`DEFERRED` is not a blocker** — it records that the walker chose to
+come back later, which is a fact about the walk, not about the lab.
 
 The taxonomy also needs to record **passes**, not just failures. Run 002 confirmed Task 2
 ("search Microsoft Foundry") and Task 3 ("Overview → Create a resource") match reality
