@@ -199,6 +199,43 @@ def cmd_walk(args) -> int:
     return asyncio.run(_walk(args))
 
 
+# ---- skill install -------------------------------------------------------
+
+
+def cmd_install_skill(args) -> int:
+    """Copy the repo's skill into the agent's skills directory.
+
+    The repo copy is the source of truth: a skill living only in
+    ``~/.copilot/skills`` is unreviewable, unversioned, and lost with the
+    machine. This makes deploying it one command, which is what stops the two
+    copies drifting -- and a test asserts they have not.
+    """
+    source = ROOT / "skills" / "lab-validator"
+    if not source.is_dir():
+        print(f"{source} is missing", file=sys.stderr)
+        return 1
+    dest = Path(args.into).expanduser() if args.into else Path.home() / ".copilot" / "skills"
+    dest = dest / "lab-validator"
+
+    copied = []
+    for path in sorted(source.rglob("*")):
+        if path.is_dir():
+            continue
+        target = dest / path.relative_to(source)
+        if args.dry_run:
+            copied.append(target)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        copied.append(target)
+
+    verb = "would install" if args.dry_run else "installed"
+    print(f"{verb} {len(copied)} file(s) into {dest}")
+    for path in copied:
+        print(f"  {path.relative_to(dest)}")
+    return 0
+
+
 # ---- entry point ---------------------------------------------------------
 
 
@@ -230,7 +267,9 @@ def main() -> int:
         description="Walk a Skillable lab as a learner and report where it has drifted.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="\n".join(
-            ["commands:", "  walk     start a run from a lab URL (the human signs in)"]
+            ["commands:",
+             "  walk     start a run from a lab URL (the human signs in)",
+             "  install-skill  copy skills/lab-validator into ~/.copilot/skills"]
             + [f"  {name:<9}{help}" for name, (_, help) in COMMANDS.items()]
         ),
     )
@@ -257,6 +296,12 @@ def main() -> int:
                        help="seconds to wait for the lab client to answer")
         w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
         return cmd_walk(w.parse_args(args.rest))
+
+    if args.command == "install-skill":
+        s = argparse.ArgumentParser(prog="lab-validator install-skill")
+        s.add_argument("--into", help="skills directory (default: ~/.copilot/skills)")
+        s.add_argument("--dry-run", action="store_true", help="list what would be written")
+        return cmd_install_skill(s.parse_args(args.rest))
 
     if args.command in COMMANDS:
         return _delegate(COMMANDS[args.command][0], args.rest)

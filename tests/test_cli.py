@@ -47,6 +47,43 @@ def test_walk_is_not_in_the_dispatch_table():
     assert "walk" not in cli.COMMANDS
 
 
+def test_install_skill_is_also_implemented_locally():
+    assert "install-skill" not in cli.COMMANDS
+    assert callable(cli.cmd_install_skill)
+
+
+def test_the_help_advertises_the_locally_implemented_commands():
+    """They are not in COMMANDS, so nothing else would notice them going
+    missing from the epilog."""
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    saved = sys.argv
+    sys.argv = ["lab-validator"]
+    try:
+        with contextlib.redirect_stdout(buf):
+            cli.main()
+    finally:
+        sys.argv = saved
+    text = buf.getvalue()
+    assert "walk" in text and "install-skill" in text
+
+
+def test_installing_the_skill_writes_every_file(tmp_path):
+    args = type("N", (), {"into": str(tmp_path), "dry_run": False})()
+    assert cli.cmd_install_skill(args) == 0
+    written = sorted(p.name for p in (tmp_path / "lab-validator").rglob("*.md"))
+    assert "SKILL.md" in written
+    assert len(written) >= 4
+
+
+def test_a_dry_run_writes_nothing(tmp_path):
+    args = type("N", (), {"into": str(tmp_path), "dry_run": True})()
+    assert cli.cmd_install_skill(args) == 0
+    assert not list(tmp_path.rglob("*.md")), "a dry run must not touch the filesystem"
+
+
 def test_the_scripts_directory_is_found_relative_to_the_package():
     assert cli.SCRIPTS.is_dir()
     assert (cli.ROOT / "pyproject.toml").exists()

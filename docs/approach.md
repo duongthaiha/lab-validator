@@ -643,6 +643,37 @@ such bugs before any lab was launched. The same argument applies to waiting poli
 microseconds, so "does an unattended run survive a human walking away?" is a question with
 an answer rather than a hope.
 
+### 2.13 Documentation an agent executes is code, and needs the same guards
+
+The skill in `skills/lab-validator/` is not prose about the tool; it is a set of commands
+an agent will run **literally and at speed**. A renamed flag in it does not produce a
+helpful error — it produces a run that dies partway through a lab with a human waiting.
+Writing it surfaced one immediately: it documented `--instruction-ref` where the real flag
+is `--ref`. Nothing would have caught that until a live walk.
+
+So the skill is tested like code. `tests/test_skill.py` parses every `lab-validator`
+invocation out of `SKILL.md` and checks the sub-command exists and every long option is
+one the real parser accepts; it also checks that named verdict codes and domains are real
+members of `taxonomy.py`, that referenced files exist, and that no reference file is
+orphaned. It is the third instance of the same guard in this repo — taxonomy codes, CLI
+dispatch table, skill commands — because they are all the same failure: **a table that
+drifted away from the thing it describes, with nothing noticing until it reached someone
+who trusted it.**
+
+The other half is location. A skill that lives only in `~/.copilot/skills` is
+unreviewable, unversioned, and lost with the machine. The repo copy is the source of
+truth, `lab-validator install-skill` deploys it, and a test asserts the two have not
+drifted — because otherwise the reviewed version and the running version are free to
+disagree, and the running one wins silently.
+
+A note on what belongs in the skill at all. The mechanics are already packaged as
+commands, so the skill's job is **judgement**: when an observation is a defect, which
+domain is at fault, what evidence is required, when to withdraw. That content is written
+in `references/judgement.md` with **no platform nouns**, which is what lets it transfer to
+any "walk a documented procedure and report where it diverges" problem. The
+platform-specific facts live in their own reference and can be swapped without touching
+the reasoning.
+
 ---
 
 ## 3. Recommended architecture

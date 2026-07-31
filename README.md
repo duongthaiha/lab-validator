@@ -266,6 +266,26 @@ While only one descriptor exists, `--target` can be omitted and every command
 infers it. Add a second descriptor and the engine stops guessing: `--target`
 becomes required rather than silently defaulting to whichever lab came first.
 
+## Using it as an agent skill
+
+The judgement that makes a report worth reading — when an observation is a
+defect, which side is at fault, what evidence is required, when to withdraw a
+finding — is packaged as an agent skill in [`skills/lab-validator/`](skills/lab-validator/).
+
+```powershell
+lab-validator install-skill              # copies it to ~/.copilot/skills
+lab-validator install-skill --dry-run    # show what would be written
+```
+
+The repo copy is the source of truth; the installed copy is a deployment of it.
+A test asserts the two have not drifted, and another parses every command out of
+`SKILL.md` and checks it against the real argument parser — a skill that teaches
+a renamed flag doesn't produce a helpful error, it produces a run that dies
+partway through a lab with a human waiting.
+
+`references/judgement.md` is written with **no platform nouns**, so it transfers
+to any "walk a documented procedure and report where it diverges" problem.
+
 ## Setup
 
 ```powershell
@@ -292,6 +312,7 @@ ruff check src scripts tests
 ```
 docs/approach.md                    architecture, findings and reuse guide
 docs/gapanalysis.md                 learner-facing gaps found in the target lab
+skills/lab-validator/               the agent skill — judgement, taxonomy, traps
 targets/<slug>.toml                 per-lab descriptor — data only, no code
 
 scripts/lab_run.py                  start/status/report a validation run
