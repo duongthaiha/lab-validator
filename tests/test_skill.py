@@ -293,3 +293,118 @@ def test_every_test_named_in_the_docs_exists():
         cited = set(re.findall(r"\b(test_[a-z0-9_]{12,})\b", path.read_text(encoding="utf-8")))
         unknown = sorted(cited - defined)
         assert not unknown, f"{name} names tests that do not exist: {unknown}"
+
+
+# --- Documented syntax, not just documented flags ---------------------------
+#
+# The checks above prove `--sections` is a real flag. They say nothing about
+# whether the *values* beside it are ones the parser accepts -- and that is
+# where this flag has already gone wrong once. The review printed a `#` column
+# the parser refused every number from, and the plausible correction (`s05` for
+# the row labelled `5`) resolved to a different section. A doc that teaches a
+# refused syntax is a bug report waiting to be filed against the tool; a doc
+# that teaches a syntax which quietly selects the wrong thing is worse.
+
+SECTIONS_FLAG = re.compile(r"--sections\s+([^\s#`]+)")
+SECTION_ID = re.compile(r"\bs(\d{2})-([a-z0-9][a-z0-9-]*)\b")
+SYNTAX_DOCS = dict(DOCS, **{"docs/approach.md": ROOT / "docs" / "approach.md"})
+
+
+def _documented_sections_expressions() -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for name, path in SYNTAX_DOCS.items():
+        for m in SECTIONS_FLAG.finditer(path.read_text(encoding="utf-8")):
+            expr = m.group(1).strip().strip("`'\"")
+            # `<expr>` and `...` are placeholders standing in for a value, not
+            # values. Everything else is being offered to a reader as typable.
+            if not expr or expr.startswith(("<", ".")):
+                continue
+            if (name, expr) not in seen:
+                seen.add((name, expr))
+                found.append((name, expr))
+    return found
+
+
+def _run_covering_documented_ids(tmp_path: Path):
+    """A run whose section ids include every id the docs name.
+
+    Ids are lab-scoped: no document could name one that exists in every lab, so
+    a doc example naming `s04-deploy-models` is not wrong -- it is quoting the
+    reference workshop. What is under test here is the syntax, so the fixture
+    adopts the slugs the docs use and leaves the rest generic.
+
+    It adopts them only *within* the reference workshop's 23 sections, so a doc
+    citing `s99-...` is refused rather than conjured into existence. Honest
+    limit: a doc that misspells the slug of a real section is still adopted and
+    still passes. Closing that would need the lab's own ids, which is precisely
+    what no checked-in test can have.
+    """
+    from lab_validator.corpus import Heading, Outline
+    from lab_validator.runlog import Run
+
+    total = 23
+    slugs: dict[int, str] = {}
+    for path in SYNTAX_DOCS.values():
+        for m in SECTION_ID.finditer(path.read_text(encoding="utf-8")):
+            index = int(m.group(1))
+            if index < total:
+                slugs.setdefault(index, m.group(2))
+    heads: list[Heading] = []
+    order = 0
+    for i in range(total):
+        heads.append(
+            Heading(order=order, level=1, id=slugs.get(i, f"lab-{i:02d}"), text=f"Lab {i:02d}")
+        )
+        order += 1
+        heads.append(Heading(order=order, level=3, id=f"l{i}-t0", text="1. Do the thing"))
+        order += 1
+    outline = Outline(title="Demo Workshop", headings=heads)
+    return Run.create(
+        tmp_path / "runs", "Demo Workshop", instance="i-1", agent="doc-check",
+        segments=outline.segments(),
+    )
+
+
+def test_the_docs_offer_sections_expressions_at_all():
+    """Vacuity guard: the scraper must actually find something to check."""
+    found = _documented_sections_expressions()
+    assert len(found) >= 4, f"only {len(found)} --sections examples scraped: {found}"
+
+
+def test_every_documented_sections_expression_parses(tmp_path):
+    """Every `--sections` value a reader could copy must resolve to sections.
+
+    Not merely "does not raise": an expression that parses to an empty
+    selection would walk nothing while looking like it worked, which is the
+    failure this whole feature exists to make impossible.
+    """
+    from lab_validator import scope
+
+    run = _run_covering_documented_ids(tmp_path)
+    known = {s.id for s in run.segments()}
+    for name, expr in _documented_sections_expressions():
+        try:
+            selection = scope.parse(expr, run)
+        except Exception as exc:  # noqa: BLE001 -- any refusal is the failure
+            raise AssertionError(f"{name} documents `--sections {expr}`, refused: {exc}") from exc
+        assert selection.chosen, f"{name}: `--sections {expr}` selects nothing"
+        unknown = sorted(set(selection.chosen) - known)
+        assert not unknown, f"{name}: `--sections {expr}` resolved to unknown ids {unknown}"
+
+
+def test_the_readme_shows_the_prompt_the_code_actually_prints():
+    """The README illustrates the prompt; an illustration that has drifted
+    teaches a syntax nobody is offered.
+
+    Checks the question and every example inside `PROMPT_HELP`, because the
+    examples are the part a reader copies -- and the part that changed when
+    numbers were added.
+    """
+    from lab_validator import scope
+
+    body = README.read_text(encoding="utf-8")
+    question = scope.PROMPT_HELP.split("|")[0].strip()
+    assert question in body, f"README does not show the real prompt: {question!r}"
+    for example in re.findall(r"'([^']+)'", scope.PROMPT_HELP):
+        assert f"'{example}'" in body, f"README omits the prompt's own example {example!r}"

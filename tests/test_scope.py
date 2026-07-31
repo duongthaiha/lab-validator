@@ -439,3 +439,85 @@ def test_a_bad_answer_is_re_asked_rather_than_fatal(tmp_path, capsys):
 
     assert applied.selection.chosen == ("s01-lab-01",)
     assert "unknown segment" in capsys.readouterr().out
+
+
+# ---- can a human type what the review just showed them? -------------------
+#
+# Section ids are not knowable before the lab is launched and segmented, which
+# is minutes after the command was typed. So the review's numbers are the only
+# handle a person has at the prompt, and every one of them has to work.
+
+
+def review_rows(run, outline) -> list[tuple[str, str]]:
+    """(number, id) for each section row of the review table."""
+    rows = []
+    for line in scope.review(run, outline, None).split("\n"):
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) >= 4 and cells[2].startswith("`s"):
+            rows.append((cells[1], cells[2].strip("`")))
+    return rows
+
+
+def test_every_number_the_review_prints_selects_the_row_it_printed_it_on(tmp_path):
+    """The defect this replaces was not a refusal but a wrong answer: the table
+    numbered rows from 1 while ids number from s00, so the reader of row 5
+    (`s04-deploy-models`) typed `s05` and silently walked a different section.
+
+    A property over the whole table rather than a fixed string, because the
+    fixed-string version of this test is exactly what passed while the bug
+    was live.
+    """
+    run, outline = make_run(tmp_path, n=12)
+    rows = review_rows(run, outline)
+    assert len(rows) == 12, "the review must list every section"
+
+    for number, segment_id in rows:
+        assert scope.parse(number, run).chosen == (segment_id,), (
+            f"the review printed {number!r} beside {segment_id}, so typing "
+            f"{number!r} must select that section and no other"
+        )
+
+
+def test_a_bare_number_is_the_number_inside_the_id(tmp_path):
+    run, _ = make_run(tmp_path, n=6)
+    assert scope.parse("4", run).chosen == ("s04-lab-04",)
+    assert scope.parse("04", run).chosen == ("s04-lab-04",)
+    assert scope.parse("0", run).chosen == ("s00-lab-00",)
+
+
+def test_numbers_can_be_listed_and_ranged(tmp_path):
+    run, _ = make_run(tmp_path, n=6)
+    assert scope.parse("1,4", run).chosen == ("s01-lab-01", "s04-lab-04")
+    assert scope.parse("1-3", run).chosen == ("s01-lab-01", "s02-lab-02", "s03-lab-03")
+    assert scope.parse("1..3", run).chosen == scope.parse("1-3", run).chosen
+
+
+def test_a_hyphen_ranges_numbers_but_never_ids(tmp_path):
+    """The ambiguity that forced `..` is an id problem, not a range problem:
+    ids contain hyphens, bare numbers cannot. Keeping `-` banned for numbers
+    would be a rule with no reason behind it -- and `1-3` is what somebody
+    reading a numbered list types."""
+    run, _ = make_run(tmp_path, n=6)
+    assert len(scope.parse("1-3", run).chosen) == 3
+
+    with pytest.raises(scope.ScopeError) as caught:
+        scope.parse("s01-s03", run)
+    assert "s01..s03" in str(caught.value), "ids still get the '..' hint"
+
+
+def test_a_number_past_the_end_is_refused_not_clamped(tmp_path):
+    run, _ = make_run(tmp_path, n=4)
+    with pytest.raises(scope.ScopeError) as caught:
+        scope.parse("9", run)
+    assert "s09" in str(caught.value), (
+        "the refusal should name what it looked for, not the raw digit"
+    )
+
+
+def test_the_prompt_offers_the_numbers_not_only_ids(tmp_path):
+    """The help line is the entire interface for somebody who has never run
+    this before. Offering only `s01,s04` teaches a syntax they cannot know."""
+    assert "'4'" in scope.PROMPT_HELP
+    run, outline = make_run(tmp_path)
+    assert "# column" in scope.HOW_TO_CHOOSE
+    assert "`4`" in scope.review(run, outline, None)

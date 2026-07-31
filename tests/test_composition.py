@@ -14,8 +14,12 @@ real APIs, with no browser. It asserts about the *joins* rather than the parts.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -315,3 +319,56 @@ def test_a_real_run_folder_still_opens(tmp_path):
     assert cli.cmd_scope(
         argparse.Namespace(run=str(run.dir), runs=None, sections=None)
     ) == 0
+
+# --- the prompt must not freeze the loop that owns the browser -------------
+
+
+def test_the_selection_prompt_does_not_block_the_event_loop():
+    """`walk` asks which sections to walk while holding a live Playwright
+    connection to the launched lab. A person reading a 23-row review takes
+    minutes, and a coroutine that blocks services no websocket for all of it.
+
+    Every other test injects a reader, so none of them has ever held the loop.
+    """
+    ticks = 0
+
+    async def scenario():
+        nonlocal ticks
+
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        beat = asyncio.ensure_future(heartbeat())
+        try:
+            answer = await cli._select_off_the_loop(_slow_input)
+        finally:
+            beat.cancel()
+        return answer
+
+    assert asyncio.run(scenario()) == "s01"
+    assert ticks > 5, (
+        f"the loop ran {ticks} times while the prompt waited -- it was frozen, "
+        "and a real browser connection would have gone unserviced"
+    )
+
+
+def _slow_input():
+    time.sleep(0.3)
+    return "s01"
+
+
+def test_a_failure_at_the_prompt_reaches_the_caller():
+    """A helper that swallowed the error would leave `walk` reporting success
+    for a selection nobody made."""
+
+    def boom():
+        raise RuntimeError("stdin exploded")
+
+    async def scenario():
+        return await cli._select_off_the_loop(boom)
+
+    with pytest.raises(RuntimeError, match="stdin exploded"):
+        asyncio.run(scenario())

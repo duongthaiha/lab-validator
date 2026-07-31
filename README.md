@@ -321,35 +321,45 @@ segmented, credentials in the vault, preflight done — `walk` stops and shows y
 what it found before it spends anything.
 
 ```
-────────────── REVIEW ──────────────
 WorkshopPLUS - Azure AI Platform and Services
 run:  runs/2026-07-30T0749Z        review: runs/2026-07-30T0749Z/review.md
 preflight: 2 failed of 9 checks    credentials: 4 captured
 
-  s01-deploy-models          Deploy models              6 tasks
-  s02-bing-connections       Bing connections           4 tasks
-  ...
-  s22-semantic-kernel        Semantic Kernel & AutoGen  ? tasks
+  |  # | id                     | section                   | tasks |
+  |  1 | s01-deploy-models      | Deploy models             |     6 |
+  |  2 | s02-bing-connections   | Bing connections          |     4 |
+  | ...
+  | 22 | s22-semantic-kernel    | Semantic Kernel & AutoGen |     ? |
 
-Sections to walk? [all | s01,s04 | s04..s06 | ? for the full review]
+Which sections should I walk?  'all' | '4' | '1,4,7' | '4-6' | '?' to
+re-print the review  [Enter = all]
 ```
 
-Answer, or skip the prompt entirely:
+**Type the numbers in the `#` column.** That is the whole point of the prompt:
+until you have signed in and the lab has been captured, the section ids do not
+exist yet, so `--sections s04-deploy-models` is not something you could have
+typed in advance. The numbers are on screen in front of you, and the number
+printed on a row always selects that row.
+
+Ids work too, once you know them — from the review, or from a previous run:
 
 ```powershell
-lab-validator walk --url "<lab url>" --name "<lab title>" --sections s04..s06
+lab-validator walk --url "<lab url>" --name "<lab title>" --sections 4-6
 lab-validator auto --url "<lab url>" --name "<lab title>" --sections all
+lab-validator walk --url "<lab url>" --name "<lab title>" --sections s04..s06
 ```
 
-Ranges use `..`, not `-`, because section ids contain hyphens (`s04-deploy-models`)
-and `s04-s06` is indistinguishable from an id. Get it wrong and it tells you:
-a typo that silently selects nothing would be worse than a refusal.
+A range between *numbers* may be written `4-6` or `4..6`. A range between *ids*
+must use `..` — `s04-s06` is indistinguishable from an id like
+`s04-deploy-models`, so it is refused with a hint rather than guessed at. Get
+anything wrong and it tells you: a typo that silently selects nothing, or
+silently selects a different section, would be far worse than a refusal.
 
 You can also review an existing run without walking it, or widen a run later:
 
 ```powershell
-lab-validator scope --run runs/2026-07-30T0749Z                       # read-only
-lab-validator scope --run runs/2026-07-30T0749Z --sections s01,s04..s06
+lab-validator scope --run runs/2026-07-30T0749Z                    # read-only
+lab-validator scope --run runs/2026-07-30T0749Z --sections 1,4-6
 ```
 
 Re-scoping only ever **widens**. A section already walked is evidence, so

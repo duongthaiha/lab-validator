@@ -44,9 +44,18 @@ NOT_SELECTED_NOTE = "not selected for this run; never attempted"
 #: erase what a previous pass actually observed.
 FROZEN = ("done", "blocked", "in_progress")
 
-#: Ranges use ``..`` because section ids contain hyphens ("s04-deploy-model"),
-#: so ``s04-s06`` is indistinguishable from an id prefix.
+#: Ranges between *ids* use ``..`` because section ids contain hyphens
+#: ("s04-deploy-model"), so ``s04-s06`` is indistinguishable from an id prefix.
+#: Between bare numbers a hyphen is unambiguous, so ``4-6`` is a range too.
 RANGE = ".."
+
+#: Said whenever a selection cannot be resolved. One sentence, one place: an
+#: error that tells you what is wrong without telling you what to type instead
+#: is half an error, and three copies of it drift.
+HOW_TO_CHOOSE = (
+    "use 'all', or the numbers in the review's # column: '4', '1,4,7', '4-6'. "
+    "Ids work too ('s04', 's04..s06')."
+)
 
 REVIEW_FILENAME = "review.md"
 
@@ -132,8 +141,9 @@ def everything(run: Run, *, how: str = "default", expression: str = "all") -> Se
 def parse(expression: str, run: Run, *, how: str = "flag") -> Selection:
     """Resolve a selection expression against this run's sections, or refuse.
 
-    Accepts ``all``, ids, unambiguous id prefixes, and inclusive ranges written
-    ``s04..s06``. Anything else raises, naming the candidates.
+    Accepts ``all``, the numbers the review prints (``4``, ``1,4,7``, ``4-6``),
+    ids, unambiguous id prefixes, and ranges between ids written ``s04..s06``.
+    Anything else raises, naming the candidates.
 
     Refusing is the whole point. A mistyped id that quietly selects nothing
     would produce an empty walk and a clean-looking report -- the same failure
@@ -145,7 +155,7 @@ def parse(expression: str, run: Run, *, how: str = "flag") -> Selection:
 
     text = (expression or "").strip()
     if not text:
-        raise ScopeError("no sections given; use 'all', or ids like 's01,s04..s06'")
+        raise ScopeError(HOW_TO_CHOOSE)
     if text.lower() in ("all", "*"):
         return everything(run, how=how, expression=text)
 
@@ -153,7 +163,7 @@ def parse(expression: str, run: Run, *, how: str = "flag") -> Selection:
     for token in _tokens(text):
         wanted.update(_resolve(token, run, ids))
     if not wanted:
-        raise ScopeError(f"{text!r} selected no sections; use 'all', or ids like 's01,s04..s06'")
+        raise ScopeError(f"{text!r} selected no sections. {HOW_TO_CHOOSE}")
 
     return Selection(
         chosen=tuple(i for i in ids if i in wanted),
@@ -169,48 +179,81 @@ def _tokens(text: str) -> list[str]:
 
 
 def _resolve(token: str, run: Run, ids: list[str]) -> list[str]:
-    if RANGE in token:
-        lo, _, hi = token.partition(RANGE)
+    lo, hi = _split_range(token)
+    if lo is not None:
         if not lo or not hi:
-            raise ScopeError(f"range {token!r} is missing an end; write it as 's04..s06'")
+            raise ScopeError(
+                f"range {token!r} is missing an end; write it as '4-6' or 's04..s06'"
+            )
         first, last = _one(lo, run), _one(hi, run)
         i, j = ids.index(first), ids.index(last)
         if i > j:
             raise ScopeError(
                 f"range {token!r} runs backwards: {first} comes after {last} in the lab. "
-                "Ranges are written low..high."
+                "Ranges are written low to high."
             )
         return ids[i : j + 1]
     return [_one(token, run)]
 
 
+def _split_range(token: str) -> tuple[str | None, str | None]:
+    """Split a range token, or return ``(None, None)`` if it is not one.
+
+    ``..`` always means a range. A single ``-`` means one too, but *only*
+    between bare numbers: section ids contain hyphens, so `s01-s03` is
+    indistinguishable from an id and must stay an id. Numbers have no such
+    ambiguity, and `1-3` is what a person types when they are reading a
+    numbered list -- which, at the prompt, is exactly what they are doing.
+    """
+    if RANGE in token:
+        lo, _, hi = token.partition(RANGE)
+        return lo, hi
+    match = re.fullmatch(r"(\d+)-(\d+)", token)
+    if match:
+        return match.group(1), match.group(2)
+    return None, None
+
+
 def _one(token: str, run: Run) -> str:
     try:
-        return run.resolve_segment(token)
+        return run.resolve_segment(_as_id(token))
     except KeyError as exc:
         # ``exc.args[0]``, not ``str(exc)``: KeyError reprs its argument, so
         # str() wraps an already-quoted message in a second set of quotes.
         raise ScopeError(f"{exc.args[0]}{_range_hint(token, run)}") from exc
 
 
-def _range_hint(token: str, run: Run) -> str:
-    """Suggest ``a..b`` when someone reasonably wrote ``a-b``.
+def _as_id(token: str) -> str:
+    """Turn a bare number into the id prefix it names: ``4`` -> ``s04``.
 
-    Section ids contain hyphens, so a hyphen cannot mean "range". That is a
-    defensible choice and an unguessable one, so the error explains it at the
-    moment it bites rather than in documentation nobody is reading yet.
+    The review prints these numbers, so they are the only handle a person has
+    at the prompt: section ids cannot be known until the lab has been launched
+    and its instructions segmented, which is minutes after the command was
+    typed. Refusing the number the tool just printed is the tool's fault.
+    """
+    return f"s{int(token):02d}" if token.isdigit() else token
+
+
+def _range_hint(token: str, run: Run) -> str:
+    """Suggest ``a..b`` when someone reasonably wrote ``a-b`` with ids.
+
+    Section ids contain hyphens, so a hyphen between *ids* cannot mean "range".
+    That is a defensible choice and an unguessable one, so the error explains it
+    at the moment it bites rather than in documentation nobody is reading yet.
+    (Between bare numbers a hyphen *is* a range -- see ``_split_range`` -- so
+    this only ever fires for the ambiguous case.)
     """
     for i, ch in enumerate(token):
         if ch != "-" or i == 0 or i == len(token) - 1:
             continue
         lo, hi = token[:i], token[i + 1 :]
         try:
-            run.resolve_segment(lo)
-            run.resolve_segment(hi)
+            run.resolve_segment(_as_id(lo))
+            run.resolve_segment(_as_id(hi))
         except KeyError:
             continue
         return (
-            f". Section ids contain hyphens, so ranges use '..' -- "
+            f". Section ids contain hyphens, so ranges between ids use '..' -- "
             f"did you mean '{lo}{RANGE}{hi}'?"
         )
     return ""
@@ -320,10 +363,21 @@ def _add_sections(add, run: Run, outline: Outline | None) -> None:
         add("")
     add("| # | id | Section | Tasks | Status |")
     add("| --- | --- | --- | --- | --- |")
-    for i, seg in enumerate(segments, 1):
-        add(f"| {i} | `{seg.id}` | {seg.title[:60]} | {_task_count(seg, outline)} "
-            f"| {(seg.status or 'pending').replace('_', ' ')} |")
+    for seg in segments:
+        # The number shown is the one *inside the id*, not the row's position.
+        # They differ -- ids start at s00, rows at 1 -- and a review that showed
+        # row 5 beside `s04-deploy-models` taught the reader to type `s05`,
+        # which selects a different section and says nothing about it. A wrong
+        # answer, not a refusal. One number, meaning one thing.
+        add(f"| {_number(seg.id)} | `{seg.id}` | {seg.title[:60]} "
+            f"| {_task_count(seg, outline)} | {(seg.status or 'pending').replace('_', ' ')} |")
     add("")
+
+
+def _number(segment_id: str) -> str:
+    """The digits a section id leads with: ``s04-deploy-models`` -> ``4``."""
+    match = re.match(r"s(\d+)", segment_id)
+    return str(int(match.group(1))) if match else "-"
 
 
 def _task_count(segment, outline: Outline | None) -> str:
@@ -339,10 +393,15 @@ def _task_count(segment, outline: Outline | None) -> str:
 def _add_how_to_choose(add) -> None:
     add("## Choosing")
     add("")
+    add("Type the numbers in the **#** column above:")
+    add("")
     add("- `all` — walk everything.")
-    add("- `s01,s04` — those sections (an unambiguous id prefix is enough).")
-    add("- `s04..s06` — inclusive range. Ranges use `..`, because section ids "
-        "contain hyphens.")
+    add("- `4` — one section.")
+    add("- `1,4,7` — several.")
+    add("- `4-6` — an inclusive range.")
+    add("")
+    add("Ids work too (`s04`, or any unambiguous prefix). Ranges *between ids* "
+        "are written `s04..s06`, because ids contain hyphens.")
     add("")
     add("Sections you leave out are recorded as **not selected**: never attempted, "
         "and reported as unknown rather than correct. A scoped run cannot answer "
@@ -418,8 +477,8 @@ def not_selected_ids(run: Run) -> list[str]:
 
 PROMPT = "sections> "
 PROMPT_HELP = (
-    "Which sections should I walk?  'all' | 's01,s04' | 's04..s06' | '?' to "
-    "re-print  [Enter = all]"
+    "Which sections should I walk?  'all' | '4' | '1,4,7' | '4-6' | '?' to "
+    "re-print the review  [Enter = all]"
 )
 
 

@@ -1201,6 +1201,76 @@ is a claim and claims need evidence like any other. For the same reason
 `selections` is a list appended to rather than a field overwritten: re-scoping a
 run is a decision with a history, not a setting.
 
+**The handle you offer must be one the user can already see.** The first version
+shipped `--sections s04-deploy-models` and treated the interactive prompt as the
+convenience path. It is the other way round: **section ids do not exist until
+after sign-in and capture**, so on a first run there is nothing a human could put
+in that flag. The prompt is not the fallback, it is the only path that works the
+first time — and it was the one nobody had driven.
+
+Driving it found the sharper version of the same mistake. The review table
+numbered its rows `enumerate(segments, 1)` while ids are generated `s{i:02d}`
+from zero, so the row labelled **5** was `s04-deploy-models`. And the parser
+accepted *neither* number: `4`, `04`, `1-3`, `2,4` were all refused. A refusal is
+survivable. The danger was the plausible correction — a human who works out that
+ids start with `s` types `s05`, which resolves cleanly, walks a **different
+section**, and files a report about it. Generalising:
+
+> **A display ordinal that differs from the identifier is a wrong-answer
+> generator.** Not a usability wrinkle: it manufactures inputs that are accepted
+> and mean something other than what the user pointed at. Either show the
+> identifier, or make the ordinal *be* the identifier — never a third number.
+
+The fix is both halves at once: the `#` column now prints the number *inside* the
+id, and a bare number resolves through the same path as an id so it inherits the
+same refusals. The guard that holds it is a **property over the generated
+artefact** — parse the review's own table and assert that every number it printed
+selects the row it was printed on. A fixed-string version of that test is exactly
+what passed while the bug was live, which is the third time in this document that
+asserting a substring has certified a defect (§2.13, earlier in this section
+where the not-selected warning block was "guarded" by a sentence the coverage
+headline already satisfied, and here).
+
+The same property idea then applies to the *documentation*: every `--sections`
+value printed anywhere in the docs is scraped and run through the real parser, so
+a doc cannot teach a syntax the tool refuses. That guard needed a fixture, and
+the fixture leaked — it adopted every section id the docs mentioned, so a
+documented id that did not exist was conjured into existence and passed. What
+made that visible was **attribution**: the mutation harness prints *which* test
+caught each mutation, and this one was caught only by the unrelated skill-drift
+check, which fired merely because a file under `skills/` had been touched.
+
+> **A mutation caught by a different test than the one under test proves
+> nothing.** "The suite went red" is the weakest possible evidence a guard
+> works. Record which test failed, and mutate a file the other guards do not
+> watch.
+
+<a id="doc-guard-limit"></a>The residual limit is stated in the guard's own
+docstring rather than left implicit: a doc that misspells the *slug* of a real
+section still passes, because no checked-in fixture can know a particular lab's
+ids. Naming that limit is the point — §2.13's citation guard carries the same
+kind of admission, and a guard whose blind spot is written down is one nobody
+mistakes for a proof.
+
+One syntax consequence worth keeping: `..` was chosen for ranges because ids
+contain hyphens, so `s04-s06` is indistinguishable from an id prefix. That
+ambiguity belongs to *ids*, not to ranges — a bare number cannot contain a
+hyphen. So `4-6` is accepted and `s04-s06` is still refused with a hint. **When a
+restriction exists to resolve an ambiguity, check it still applies before
+carrying it into a new input format**; inherited restrictions outlive their
+reasons and get taught as rules.
+
+**Do not block an event loop that owns a browser.** The prompt is `input()`,
+called from an `async` function holding a live CDP connection, and a human takes
+minutes. A 75-second block survived in a probe, but "survived once" is not a
+property. It runs on a **daemon thread** rather than `asyncio.to_thread`,
+because that executor's workers are non-daemon and joined at interpreter
+shutdown: an unanswered prompt could keep the process alive after Ctrl-C. The
+Ctrl-C probe was inconclusive — `communicate()` closes stdin, so `input()` raised
+`EOFError` before the signal arrived — and rather than keep chasing a probe,
+the construction that cannot hang either way was chosen. **Prefer the design
+that removes the failure mode over the experiment that fails to reproduce it.**
+
 Operating this — the review, the syntax, what to select and what it costs — is in
 [the README](../README.md#reviewing-what-you-got-and-choosing-what-to-walk) and
 Step 4 of the skill.

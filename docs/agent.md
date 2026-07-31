@@ -172,7 +172,7 @@ An unattended walk that cannot finish should stop rather than spend.
 | `--max-turns` | 200 | mechanical moves and model turns share the ceiling, so a loop that thrashes cannot run forever |
 | `--turn-timeout` | 900s | a lab step is not a chat reply; the SDK's own default of 60s is far too short |
 | `--model` | `auto` | pinning a model name means eventually validating a lab with a dependency that has itself retired |
-| `--sections` | all | the cheapest budget of the four: walking 3 sections of 23 costs a twentieth of the time. Ranges use `..` (`s04..s06`), because section ids contain hyphens |
+| `--sections` | all | the cheapest budget of the four: walking 3 sections of 23 costs a twentieth of the time. Takes the numbers from the review's `#` column (`4`, `1,4,7`, `4-6`) or the section ids (`s04`, `s04..s06` — ids range with `..` because they contain hyphens) |
 
 `--sections` is the one budget that changes what the report *means* rather than
 how far it gets, so it is also the one the report announces. A scoped `auto` run
@@ -196,8 +196,13 @@ To review and narrow first, then let the agent walk only what you chose:
 
 ```powershell
 lab-validator scope --run runs/2026-07-31T1448Z                    # read the review
-lab-validator auto  --run runs/2026-07-31T1448Z --sections s04..s06
+lab-validator auto  --run runs/2026-07-31T1448Z --sections 4-6
 ```
+
+`scope` is worth running before `auto` for a reason beyond the review itself:
+section ids are only knowable *after* a lab has been captured, so on a first run
+there is nothing you could put in `--sections` yet. `scope` prints them — with a
+`#` column whose numbers `--sections` also accepts.
 
 Without `--run`, `auto` starts a walk and then identifies the run it just made
 by **set difference** against what existed before — not by taking the newest

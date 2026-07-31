@@ -111,21 +111,29 @@ and the credentials are captured, before it spends anything — and shows you wh
 it got.
 
 ```powershell
-lab-validator scope --run <run folder>                        # print the review, change nothing
-lab-validator scope --run <run folder> --sections s04..s06    # narrow it
+lab-validator scope --run <run folder>                     # print the review, change nothing
+lab-validator scope --run <run folder> --sections 4-6      # narrow it
 ```
 
 Or decide up front and skip the prompt entirely:
 
 ```powershell
-lab-validator walk --url "<lab url>" --name "<lab title>" --sections s04..s06
+lab-validator walk --url "<lab url>" --name "<lab title>" --sections 4-6
 ```
 
-Ranges use `..`, not `-`: section ids contain hyphens (`s04-deploy-models`), so
-`s04-s06` is indistinguishable from an id and is refused with a hint. An unknown
-or ambiguous id is refused too, naming the real candidates. A typo that silently
-selected nothing would be worse than a refusal — it would produce a clean report
-about a lab nobody looked at.
+**Type the numbers from the review's `#` column** — `4`, `1,4,7`, `4-6`, or
+`all`. This is not a convenience: section ids do not exist until the lab has
+been captured, so on a first run there is nothing else you could type. The
+number printed on a row always selects that row.
+
+Ids work too once you know them (`s04`, or any unambiguous prefix). A range
+*between ids* must be written `s04..s06`: ids contain hyphens
+(`s04-deploy-models`), so `s04-s06` is indistinguishable from an id and is
+refused with a hint. Numbers cannot contain a hyphen, so `4-6` is unambiguous
+and allowed. An unknown or ambiguous id is refused too, naming the real
+candidates. A typo that silently selected nothing — or silently selected a
+*different* section — would be worse than a refusal: it would produce a clean
+report about a lab nobody looked at.
 
 **What to select.** Scope to the sections the question is actually about:
 

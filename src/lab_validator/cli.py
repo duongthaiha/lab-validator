@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import importlib.util
 import sys
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -85,6 +86,49 @@ def _delegate(script: str, argv: list[str]) -> int:
 
 
 # ---- walk ----------------------------------------------------------------
+
+
+async def _select_off_the_loop(fn, *args, **kwargs):
+    """Run a blocking call in a daemon thread, without freezing this loop.
+
+    The scope prompt waits on ``input()`` for as long as a person takes to read
+    the review and decide -- minutes, on a 23-section lab. The caller owns a
+    live Playwright connection to the launched lab, and a coroutine that blocks
+    services no websocket. The sign-in gate already refuses to block for exactly
+    this reason: it polls with ``await sleep`` rather than waiting inline.
+
+    A *daemon* thread rather than ``asyncio.to_thread``: the default executor's
+    workers are non-daemon and joined during interpreter shutdown, so a prompt
+    nobody ever answers could keep the process alive after Ctrl+C. A daemon
+    thread cannot. The only thing lost is a clean join, and there is nothing to
+    join -- the answer is already in the run folder or it was never given.
+    """
+    loop = asyncio.get_running_loop()
+    done = loop.create_future()
+
+    def finish(setter, value):
+        # ``done`` may already be cancelled if the caller was torn down while
+        # the human was still thinking; setting a result on it would raise.
+        if not done.done():
+            setter(value)
+
+    def work():
+        try:
+            result = fn(*args, **kwargs)
+        except BaseException as exc:  # noqa: BLE001 - handed back to the loop
+            # Bound to a default argument: ``except ... as exc`` deletes ``exc``
+            # when the block ends, so a lambda closing over it would raise
+            # NameError on the loop and lose the real error entirely.
+            loop.call_soon_threadsafe(
+                lambda e=exc: finish(done.set_exception, e)
+            )
+        else:
+            loop.call_soon_threadsafe(
+                lambda r=result: finish(done.set_result, r)
+            )
+
+    threading.Thread(target=work, name="lab-validator-scope", daemon=True).start()
+    return await done
 
 
 async def _walk(args) -> int:
@@ -262,8 +306,11 @@ async def _walk(args) -> int:
             # what this command did before selection existed.
             print()
             try:
-                applied = scope.select(
-                    run, args.sections, outline=outline, vault=vault
+                # Off the loop: `select` may block on `input()` for as long as a
+                # person takes to read the review and decide, and this coroutine
+                # owns the Playwright connection to the launched lab.
+                applied = await _select_off_the_loop(
+                    scope.select, run, args.sections, outline=outline, vault=vault
                 )
             except scope.ScopeError as exc:
                 print(f"--sections: {exc}", file=sys.stderr)
