@@ -260,6 +260,41 @@ matters.
 
 ---
 
+## 18. Act through the learner's controls; use privileged access to look, not to do
+
+Any capability that **acts** on the product under test through something other
+than the control a human would use is a **bypass**. It reaches the right answer
+through a door the learner cannot open, so it can only ever prove that the door
+*you* used works.
+
+The classic case: reading instructions by calling the pane's API instead of
+scrolling it. Faster, exact, and completely blind to a broken scrollbar — which
+would leave the product unusable and the report silent in both directions. The
+defect is not missed through carelessness; you were never on the path where it
+lives.
+
+Observation is never a bypass. Reading state claims nothing about whether a
+control works. Nor is input through the harness's own documented input channel,
+when that channel *is* how a human's keystrokes arrive.
+
+Do not ban the fast door — it is often the better tool. Pair it instead:
+
+- Every bypass **names the control-channel capability** that would close its
+  hole, and the run keeps a ledger of what it actually used.
+- Pairing is **per capability, not per surface**. Otherwise one click anywhere
+  in the UI vouches for every control in it, which is precisely the false
+  comfort this is meant to remove.
+- The ledger **publishes the absence** in the report's coverage section,
+  alongside sections never reached and checks never made. Same question, three
+  answers: *what does a clean report not cover?* This is principle 9 turned on
+  the validator itself.
+- An **unclassified action is an error, not a pass**. Adding a new way to touch
+  the product without declaring which door it uses must fail at commit time —
+  otherwise the ledger quietly stops being true, which is worse than not having
+  one.
+
+---
+
 ## Writing a finding somebody will act on
 
 A finding is an argument. It needs:

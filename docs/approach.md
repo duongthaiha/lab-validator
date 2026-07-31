@@ -750,6 +750,52 @@ deliberately. G-30 was only ever catchable because somebody thought to ask what 
 deployment actually served, and the value of that question is not evidence that no unasked
 question matters.
 
+### 2.16 A validator that succeeds by a route the learner does not have has proved nothing
+
+The engine reads instructions through `window.api.v1` because it is fast and exact. A
+learner scrolls. If the instructions pane had a broken scrollbar, every run to date would
+have sailed past it — the walk would pass, the lab would be unusable, and the report would
+say so in neither direction. The defect is invisible not because we failed to look but
+because **we were never on the path where it lives**.
+
+Name the general shape, because it is not about scrolling. Every capability the validator
+uses sits on a *surface* (the VM, the lab UI, our own bookkeeping) and reaches it through a
+*channel* (the visible control the learner uses, a privileged API, raw DOM). A capability
+that **acts** on the **lab UI** through anything **other than the control channel** is a
+**bypass**: it gets the right answer by a door the learner cannot open. Observation is
+never a bypass — reading the DOM claims nothing about whether a control works. Nor is VM
+input through the lab client's own API, because that *is* the learner's input path; the
+lab client is the keyboard.
+
+So the rule is narrow on purpose:
+
+> **Act through the learner's controls. Use privileged APIs for observation and
+> bookkeeping only.**
+
+But a rule that only forbids is half a rule, because the bypass is often genuinely the
+better tool — paging instructions by API is exact where scrolling is flaky, and we want
+both. The other half is **pairing**: every bypass names the control-channel capability
+that would close its hole (`goto_page` → `scroll_instructions`), and the run keeps a
+ledger of which capabilities it actually used. Use the fast door as much as you like,
+provided you walk through the learner's one at least once. The pairing is **per
+capability, not per surface** — otherwise any click anywhere in the lab chrome would vouch
+for every control in it, which is exactly the false comfort this is meant to remove.
+
+Two consequences worth stating, because they are where the value actually lands:
+
+- **The ledger publishes an absence.** `Ledger.to_markdown()` appears in the run report's
+  coverage section, next to sections never reached and preflight checks never made. All
+  three answer the same question — *what does a clean report not cover?* — and all three
+  are things a reader would otherwise assume were fine. This is principle 9 applied to the
+  validator itself rather than to the lab.
+- **An unknown verb is an error, not a pass.** `record_action` raises on a verb it does not
+  recognise, and a test scrapes the actual verbs out of `lab_step.py` and fails if any is
+  unclassified. Adding a new way to touch the lab without saying which door it uses is a
+  bug, caught at commit time. That test earned its place immediately: it rejected
+  `dblclick` (no such method — it is `click(double=True)`) and then rejected my first
+  attempt at the pairing, where I had claimed clicking the Instructions *tab* covered the
+  *pager*. It does not. Switching to a pane is not reading it.
+
 ---
 
 ## 3. Recommended architecture

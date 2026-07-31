@@ -42,6 +42,7 @@ from lab_validator.imaging import (  # noqa: E402
     stability,
 )
 from lab_validator.labclient import LabClient  # noqa: E402
+from lab_validator.learnerpath import Ledger
 from lab_validator.report import write_segment  # noqa: E402
 from lab_validator.runlog import DOMAINS, FINDING_VERDICTS, Run  # noqa: E402
 
@@ -90,7 +91,11 @@ Actions (repeat --do; they run in the order given):
   until:PROBE[:SEC]  poll until PROBE matches, default budget 300s
   shot[:LABEL]       capture the VM screen as evidence
   dialog             dismiss a lab dialog and report its text
-  page:N             go to instruction page N
+  page:N             go to instruction page N — fast, exact, and a BYPASS: it
+                     never touches the pane's own navigation, so a pane that
+                     will not scroll still reads as a clean section
+  read[:PX]          scroll the instruction pane the way a learner does, and
+                     report a finding if it does not move (default 600px)
 
 Probes for until: any literal text to find on screen is not supported (there is
 no OCR here); probes are lab-client conditions:
@@ -180,12 +185,18 @@ PROBES = {"quiet": probe_quiet, "connected": probe_connected}
 
 
 async def run_actions(
-    lab: LabClient, run: Run, segment: str, label: str, actions: list[str]
+    lab: LabClient, run: Run, segment: str, label: str, actions: list[str],
+    ledger: Ledger | None = None,
 ) -> int:
     findings = 0
+    # Which channels this step used, so the run can state what it did *not*
+    # exercise. Owned by the caller because the coverage claim belongs to the
+    # whole walk, and this function is one step of many.
+    ledger = ledger if ledger is not None else Ledger()
     for raw in actions:
         verb, _, arg = raw.partition(":")
         verb = verb.strip().lower()
+        ledger.record_action(verb)
 
         if verb in ("click", "dblclick", "move"):
             x, y = (int(v) for v in arg.split(","))
@@ -277,6 +288,28 @@ async def run_actions(
             await lab.goto_page(int(arg))
             run.step(segment, action=f"page:{arg}", surface="dom")
 
+        elif verb == "read":
+            # The learner's way through the instruction pane. `page:` is faster
+            # and exact, which is exactly why it is a bypass: it never touches
+            # the pane's own navigation, so a pane that will not scroll reads as
+            # a clean section.
+            before = await lab.instructions.evaluate(
+                "() => Math.round(document.scrollingElement?.scrollTop ?? 0)"
+            )
+            after = await lab.scroll_instructions(int(arg) if arg else 600)
+            if after == before:
+                findings += 1
+                run.step(
+                    segment, verdict="LAB003", severity="major", domain="setup",
+                    action=f"read:{arg or 600}", surface="dom",
+                    note=(f"instruction pane did not scroll; scrollTop stayed at {before}. "
+                          "A learner reading this section by hand would be stuck."),
+                )
+                print(f"  !! pane did not move at scrollTop {before}")
+            else:
+                run.step(segment, action=f"read:{arg or 600}", surface="dom",
+                         note=f"scrollTop {before} -> {after}")
+
         elif verb == "shot":
             shot = await capture(lab, run, segment, arg or label)
             run.step(segment, action="shot", surface="vm", images=[shot])
@@ -308,7 +341,16 @@ async def main_async(args) -> int:
             if args.start_segment:
                 run.start_segment(args.segment, await lab.minutes_remaining())
 
-            findings = await run_actions(lab, run, args.segment, args.label, args.do or [])
+            # The ledger has to survive whatever the step does, including
+            # aborting mid-way -- a walk that dies is exactly the one whose
+            # coverage claim needs to be honest.
+            ledger = Ledger.load(run.dir)
+            try:
+                findings = await run_actions(
+                    lab, run, args.segment, args.label, args.do or [], ledger
+                )
+            finally:
+                ledger.save(run.dir)
 
             if args.end_segment:
                 run.end_segment(args.segment, args.end_segment, await lab.minutes_remaining())

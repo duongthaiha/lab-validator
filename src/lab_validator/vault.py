@@ -174,6 +174,26 @@ class Vault:
         """
         return {f"{c.scope}/{c.label}": c.value for c in self.of_shape("url")}
 
+    def label_index(self) -> dict[str, str]:
+        """Lower-cased label -> ``Scope/Label`` reference.
+
+        The lookup table :func:`asks.asks_in` resolves against. It deliberately
+        exposes **labels only**: deciding which credential an instruction wants
+        must never require holding the secret, so the matcher never sees one.
+        """
+        return {c.label.lower(): f"{c.scope}/{c.label}" for c in self.credentials}
+
+    def asks_in(self, text: str):
+        """Which lab-issued values this instruction text is asking for.
+
+        Convenience join so callers do not have to know that resolution happens
+        on labels. An ask that comes back unsatisfied means the text requests
+        something this lab never issued -- a finding, not a lookup failure.
+        """
+        from .asks import asks_in
+
+        return asks_in(text, self.label_index())
+
     # ---- reporting ------------------------------------------------------
 
     def redacted_rows(self) -> list[dict]:

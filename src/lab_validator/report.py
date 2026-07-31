@@ -20,6 +20,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from .corpus import Anomaly, Outline
+from .learnerpath import Ledger
 from .runlog import FINDING_VERDICTS, Run, Segment
 from .taxonomy import CODE_NAMES
 
@@ -438,6 +439,23 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
     if never:
         add(f"> **{len(never)} sections were never reached.** Nothing in this report "
             "says anything about them — they are unknown, not correct.")
+        add("")
+
+    # Two coverage claims the section table cannot make, both of the same kind:
+    # things that went unexamined rather than things that failed. Neither is a
+    # defect in the lab, and both change what a clean report is worth.
+    ledger = Ledger.load(run.dir)
+    if ledger.used:
+        add(ledger.to_markdown())
+
+    preflight = run.manifest.get("preflight") or {}
+    if preflight.get("unchecked"):
+        add("### What the setup preflight could not check")
+        add("")
+        add("A clean preflight means *the things we knew to check* passed:")
+        add("")
+        for reason in preflight["unchecked"]:
+            add(f"- {reason}")
         add("")
 
     # ---- findings -------------------------------------------------------

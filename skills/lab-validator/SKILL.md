@@ -95,6 +95,18 @@ Read the whole section first. Do **not** work from the task list alone —
 prerequisites, warnings and "if you see X, do Y" notes live in the prose, and
 missing one produces a false finding.
 
+Reading by API is a **bypass**: it is faster and exact, but it cannot see a
+broken instructions pane. Scroll it the way a learner does at least once per
+run, so the pager's blind spot is closed by observation rather than by
+assumption:
+
+```powershell
+lab-validator step --segment s04 --label read-instructions --do read
+```
+
+If the pane does not move, that is a `LAB003 / domain=setup` finding recorded
+automatically — the lab is unreadable, which gates everything after it.
+
 ## Step 5 — Do the work, in the learner's path
 
 ```powershell
@@ -110,6 +122,11 @@ Click visible controls and type into focused fields. Use `window.api.v1` for
 navigation bookkeeping and reading state — never to perform an action the
 learner is told to perform by hand. A broken scroll, a dead button, an input
 that rejects paste: none of those are visible to a validator that shortcuts.
+
+Every action is recorded against the capability it used, and the run report
+names any bypass whose learner-path equivalent was never exercised. Treat that
+list as coverage, not as a scolding: it says which controls the run has no
+opinion about.
 
 **Do the work; do not check reachability.** Reaching the page that contains the
 button proves nothing. Press the button and read the artifact it was supposed to

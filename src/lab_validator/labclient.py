@@ -94,6 +94,26 @@ class LabClient:
         )
         await self.page.wait_for_timeout(600)
 
+    async def scroll_instructions(self, delta: int = 600) -> int:
+        """Scroll the instruction pane the way a learner does, and say how far.
+
+        :meth:`goto_page` is faster and exact, and that is the problem: it pages
+        the pane through the API without ever touching the pane's own
+        navigation, so a broken scroll or a pager that silently skips content is
+        invisible to a walk that only uses it. This is the control that closes
+        that hole -- a real wheel event on the real element.
+
+        Returns the scroll offset afterwards, so a caller can tell the
+        difference between "scrolled" and "did nothing", which is the failure
+        actually worth catching.
+        """
+        await self.instructions.locator("body").hover()
+        await self.page.mouse.wheel(0, delta)
+        await self.page.wait_for_timeout(400)
+        return await self.instructions.evaluate(
+            "() => Math.round(document.scrollingElement?.scrollTop ?? 0)"
+        )
+
     async def instructions_text(self) -> str:
         raw = await self.instructions.inner_text("body")
         return re.sub(r"\s*\n\s*", "\n", raw).strip()

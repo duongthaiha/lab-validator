@@ -283,3 +283,54 @@ def test_numbering_is_stable_across_domains(tmp_path):
     assert text.index("first by severity") < text.index("last by severity")
     assert "**#1**" in text.split("### Who fixes what")[1]
 
+
+
+# ---- coverage the section table cannot express ---------------------------
+#
+# Both of these publish an *absence*: routes we did not take, and checks we
+# could not make. A report that omits them reads cleaner than the run was.
+
+
+def test_the_report_admits_which_learner_controls_went_untested(tmp_path):
+    from lab_validator.learnerpath import Ledger
+
+    run = make_run(tmp_path)
+    ledger = Ledger.load(run.dir)
+    ledger.record_action("page")  # the bypass: read instructions without scrolling
+    ledger.save(run.dir)
+
+    out = render(run)
+
+    assert "scroll_instructions" in out, (
+        "the walk read instructions by a route the learner does not have, and the "
+        "report did not say so"
+    )
+
+
+def test_a_covered_bypass_is_not_reported_as_a_hole(tmp_path):
+    from lab_validator.learnerpath import Ledger
+
+    run = make_run(tmp_path)
+    ledger = Ledger.load(run.dir)
+    ledger.record_action("page")
+    ledger.record_action("read")  # the learner's own path through the pane
+    ledger.save(run.dir)
+
+    out = render(run)
+
+    assert "scroll_instructions" not in out, (
+        "the control channel was exercised, so claiming it is untested is a false alarm"
+    )
+
+
+def test_the_report_repeats_what_the_preflight_could_not_check(tmp_path):
+    run = make_run(tmp_path)
+    run.manifest["preflight"] = {
+        "unchecked": ["model identity behind each deployment name"],
+    }
+
+    out = render(run)
+
+    assert "model identity behind each deployment name" in out, (
+        "a passing preflight must never be readable as 'the setup is correct'"
+    )
