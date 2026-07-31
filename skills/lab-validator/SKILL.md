@@ -185,13 +185,17 @@ reached"**, and a reader will assume the flattering one.
 
 ```powershell
 lab-validator run --finish done        # or: blocked / partial
-lab-validator run --status
-lab-validator run --next
+lab-validator next                     # confirms the section is really done
 ```
+
+`next` will not let you leave a section with a task nobody judged, and it names
+which ones. That refusal is the point: the failure mode being prevented is a
+task quietly skipped inside a section that then reports clean.
 
 Section reports are written **as the walk happens**, not at the end. A
 multi-hour unattended walk *will* be interrupted, and a run that dies with all
-its findings unwritten has produced nothing.
+its findings unwritten has produced nothing. `next` reads only the run folder,
+so resuming an interrupted walk is the same command as continuing a live one.
 
 ## Step 8 — Report
 
@@ -247,6 +251,11 @@ are in `references/judgement.md`.
 10. **Keep distinct failures distinct.** *Not signed in*, *page does not exist*
     and *signed in with nothing there* need three different messages, because
     they need three different actions.
+11. **Act through the learner's controls; look through anything.** A capability
+    that *acts* on the lab UI by any route the learner does not have proves only
+    that your route works. Reading state is never a bypass. Where the fast route
+    is the better tool, use it — and exercise its learner-path equivalent at
+    least once, so the ledger can say the control works rather than assume it.
 
 ### Deciding the domain
 
