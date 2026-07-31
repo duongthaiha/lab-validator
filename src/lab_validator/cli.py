@@ -47,6 +47,7 @@ COMMANDS = {
 #: hardcoded copy in any of them silently rots the moment a command is added.
 BUILTINS = {
     "walk": "start a run from a lab URL (the human signs in)",
+    "auto": "walk the whole lab with an agent (the human only signs in)",
     "next": "what the walk loop says to do now, and why",
     "install-skill": "copy skills/lab-validator into ~/.copilot/skills",
 }
@@ -257,6 +258,58 @@ def cmd_walk(args) -> int:
     return asyncio.run(_walk(args))
 
 
+def cmd_auto(args) -> int:
+    """Sign in, then let an agent do the lab.
+
+    Sequencing is *not* delegated. ``agent.drive`` calls the same
+    ``walkloop.next_move`` a human would, executes the mechanical moves itself,
+    and asks a model only where judgement is required -- so every refusal the
+    loop makes still holds when nobody is watching. See ``agent.py``.
+    """
+    from .agent import AgentUnavailable, walk_autonomously
+    from .runlog import Run
+
+    runs_root = Path(args.runs or "runs")
+
+    if args.run:
+        run_dir = Path(args.run)
+    else:
+        # Which run is this? Record what existed before walking, so the new one
+        # is identified by *not having been there*, rather than by being newest.
+        # Position is not identity, and a clock skew or a parallel walk is
+        # exactly the case where "latest" quietly returns somebody else's lab.
+        before = {p.resolve() for p in runs_root.glob("*") if p.is_dir()}
+        rc = cmd_walk(args)
+        if rc != 0:
+            return rc
+        fresh = sorted({p.resolve() for p in runs_root.glob("*") if p.is_dir()} - before)
+        if len(fresh) != 1:
+            print(
+                f"expected exactly one new run under {runs_root}, found {len(fresh)}: "
+                f"{[p.name for p in fresh]}. Re-run with --run <folder> to say which.",
+                file=sys.stderr,
+            )
+            return 2
+        run_dir = fresh[0]
+
+    print(f"\n-> driving {run_dir.name}\n")
+    try:
+        progress = walk_autonomously(
+            run_dir,
+            model=args.model,
+            max_turns=args.max_turns,
+            turn_timeout=args.turn_timeout,
+        )
+    except AgentUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 3
+
+    print(f"\n{progress.summary()}")
+    run = Run.open(run_dir)
+    print(f"report: {run.dir / 'gap-analysis.md'}")
+    return 0
+
+
 # ---- skill install -------------------------------------------------------
 
 
@@ -433,6 +486,33 @@ def main() -> int:
                        help="seconds to wait for the lab client to answer")
         w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
         return cmd_walk(w.parse_args(args.rest))
+
+    if args.command == "auto":
+        from .agent import DEFAULT_MODEL, DEFAULT_TURN_TIMEOUT
+        from .browser import DEFAULT_CDP_PORT
+
+        a = argparse.ArgumentParser(prog="lab-validator auto")
+        a.add_argument("--url", help="the lab or catalogue URL")
+        a.add_argument("--name", help="the lab's title, to disambiguate the URL")
+        a.add_argument("--run", help="drive an existing run instead of starting one")
+        a.add_argument("--runs", help="runs root (default: ./runs)")
+        a.add_argument("--model", default=DEFAULT_MODEL, help="model to drive with")
+        a.add_argument("--max-turns", type=int, default=200,
+                       help="ceiling on moves, so a stuck walk cannot run forever")
+        a.add_argument("--turn-timeout", type=float, default=DEFAULT_TURN_TIMEOUT,
+                       help="seconds one model turn may take")
+        a.add_argument("--agent", default="lab-validator", help="who is walking")
+        a.add_argument("--signin-budget", type=float, default=900.0,
+                       help="seconds to wait for a human to sign in")
+        a.add_argument("--launch-budget", type=float, default=180.0,
+                       help="seconds to wait for Launch to become clickable")
+        a.add_argument("--client-budget", type=float, default=300.0,
+                       help="seconds to wait for the lab client to answer")
+        a.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
+        parsed = a.parse_args(args.rest)
+        if not parsed.run and not parsed.url:
+            a.error("--url is required unless --run names an existing run")
+        return cmd_auto(parsed)
 
     if args.command == "next":
         n = argparse.ArgumentParser(prog="lab-validator next")

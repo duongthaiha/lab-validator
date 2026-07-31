@@ -256,6 +256,48 @@ Two refusals you will meet, both intentional:
 | still asking for a task you believe you did | your `--ref` named a *section*; `lab-validator text --segment s08 --tasks` prints the real anchors |
 | asking you to REPORT a section you already reported | a finding was recorded *after* that report was written, so the report on disk no longer says what the run knows |
 
+### Or let an agent walk it: `auto`
+
+```powershell
+lab-validator auto --url "<lab url>" --name "<lab title>"   # sign in, then leave it
+```
+
+Same loop, same refusals — the only difference is who answers the PERFORM moves.
+`auto` needs the optional extra (`pip install -e .[agent]`) and an authenticated
+`copilot`; without either it fails saying so and points you back at
+`lab-validator next`, which needs no model at all.
+
+**Python keeps the sequencing; the model only supplies judgement.** That split is
+the whole design:
+
+```
+open / read / report / advance   →  executed directly, no model consulted
+perform / assess                 →  one scoped model turn, then ask the loop again
+```
+
+The loop's refusals were each paid for by a wrong report, and a model that owned
+sequencing would turn every one of them into a suggestion it could quietly
+ignore. So it is never asked. Three consequences worth knowing:
+
+- **A model's claim of progress is never believed.** Before and after every turn
+  the run folder is fingerprinted — steps recorded, tasks still unjudged, section
+  status. Identical fingerprint means nothing happened, whatever the transcript
+  says. Three of those in a row stops the walk and says which task was
+  outstanding.
+- **The loop applies that scepticism to itself too.** A mechanical move that comes
+  back unchanged three times is a command failing silently, not a move worth
+  repeating; it stops and tells you what to run by hand.
+- **Tools outside the learner's path are denied, not discouraged.** A shell would
+  let the agent repair a broken deployment and then report the lab as working
+  while the learner still cannot finish it — a confidently wrong answer, which is
+  worse than no answer. Tool output is scrubbed through the run's redactor on the
+  way back, so lab-issued credentials never enter the transcript.
+
+Budgets are explicit, because an unattended walk that cannot finish should stop
+rather than spend: `--max-turns` (default 200) and `--turn-timeout` (default 900s,
+since a lab step is not a chat reply). `--run <folder>` drives a run that already
+exists, so an interrupted walk resumes instead of restarting.
+
 ### Act through the learner's controls
 
 A capability that *acts* on the lab by a route the learner does not have proves

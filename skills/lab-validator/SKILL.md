@@ -34,6 +34,26 @@ the recorded trace of what was observed.
 
 ---
 
+## Two ways to drive this, and how to tell which you are
+
+The eight steps below are the walk. Something has to sequence them, and it is
+either you or `lab-validator auto`.
+
+| | You drive | `auto` drives |
+|---|---|---|
+| Sequencing | you run each command | Python runs the loop; a model is asked only to PERFORM |
+| Steps 1–3, 7 | yours | already handled — do not repeat them |
+| Steps 4–6, 8 | yours | **yours, and the reason you are reading this** |
+
+**If you have no shell, you are inside `auto`.** Tools outside the learner's path
+are denied there — not as a restriction but because a lab you fixed from a
+terminal reports as working while the learner still cannot finish it. Under
+`auto` the sections open, close, report and advance without you; your entire job
+is the judgement in Steps 4–6 and 8. Trying to run the commands in Steps 2, 3 and
+7 will simply be refused.
+
+Either way the rules are the same, because it is the same loop.
+
 ## Step 1 — Attach to a browser
 
 ```powershell
