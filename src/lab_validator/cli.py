@@ -171,6 +171,12 @@ async def _walk(args) -> int:
                 agent=args.agent,
                 segments=outline.segments(),
             )
+            # A second copy inside the run, because artifacts/ is shared and the
+            # next walk overwrites it. Without this, asking an old run what to do
+            # next would read a *different lab's* tasks and answer confidently.
+            # Run folders are evidence; evidence that depends on a mutable file
+            # somewhere else is not evidence.
+            outline.save(run.dir / "outline.json")
             run.manifest["targetSlug"] = target.slug
             run.manifest["targetEnriched"] = target.is_enriched
             run.manifest["enrichmentGaps"] = target.enrichment_gaps()
@@ -284,6 +290,41 @@ def cmd_install_skill(args) -> int:
 # ---- next: what the loop says to do now ----------------------------------
 
 
+def _outline_for(run) -> tuple[object | None, str]:
+    """The outline this run was walked against, or nothing, with the reason.
+
+    Preference order matters more than it looks. The run-local copy is evidence;
+    the shared ``artifacts/`` copy is a mutable file that the *next* walk
+    overwrites. Reading the shared copy for an older run would enumerate a
+    different lab's tasks and answer with complete confidence, which is worse
+    than answering nothing — so the fallback is only taken when the manifest's
+    recorded hash still matches what is on disk.
+    """
+    import hashlib
+
+    from .corpus import Outline
+
+    local = run.dir / "outline.json"
+    if local.exists():
+        return Outline.load(local), ""
+
+    corpus = run.manifest.get("corpus") or {}
+    recorded, path = corpus.get("sha256"), corpus.get("path")
+    if not (recorded and path):
+        return None, "this run recorded no corpus, so task coverage cannot be checked"
+    shared = Path(path)
+    sibling = shared.with_name("outline.json")
+    if not (shared.exists() and sibling.exists()):
+        return None, f"the corpus this run used is gone from {shared.parent}"
+    actual = hashlib.sha256(shared.read_bytes()).hexdigest()
+    if actual != recorded:
+        return None, (
+            f"{shared.name} has changed since this run walked it (hash mismatch), "
+            "so it now describes a different lab. Refusing to enumerate tasks from it."
+        )
+    return Outline.load(sibling), ""
+
+
 def cmd_next(args) -> int:
     """Print the next move, decided from the run folder alone.
 
@@ -292,7 +333,6 @@ def cmd_next(args) -> int:
     judgement is the one part that cannot be packaged. Deciding *what* comes
     next, and refusing to advance past a task nobody judged, can be.
     """
-    from .corpus import Outline
     from .runlog import Run
     from .vault import Vault
     from .walkloop import describe, next_move
@@ -303,14 +343,9 @@ def cmd_next(args) -> int:
         print(f"no run found under {runs_root}", file=sys.stderr)
         return 2
 
-    outline = None
-    corpus = (run.manifest.get("corpus") or {}).get("outline")
-    for candidate in ([Path(corpus)] if corpus else []) + [run.dir / "outline.json"]:
-        if candidate.exists():
-            outline = Outline.load(candidate)
-            break
+    outline, why_not = _outline_for(run)
     if outline is None:
-        print("note: no corpus outline found, so task coverage cannot be checked")
+        print(f"note: {why_not}")
 
     # Labels only. The vault's values stay in the vault; what the loop needs is
     # the ability to say "this task wants the admin password", not the password.

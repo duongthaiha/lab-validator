@@ -876,6 +876,17 @@ Two consequences worth stating, because they are where the value actually lands:
   dead end. A loop that quietly skipped it would hide precisely the class of
   defect the walk exists to find.
 
+  **A run folder that depends on a file somewhere else is not evidence.** The
+  walk wrote its parsed outline only to `artifacts/instructions/`, which is shared
+  and which the *next* walk overwrites. Nothing failed — that is the problem.
+  Asking an older run what to do next would have enumerated a different lab's
+  tasks and answered with total confidence, and a wrong answer nobody can see is
+  wrong is how a validator stops being worth running. Two changes: the walk saves
+  a copy of the outline **into the run**, and the shared-path fallback is taken
+  only when the manifest's recorded hash still matches the file. On a mismatch it
+  refuses and says why. Refusing is strictly better than guessing here, because
+  the guess is indistinguishable from a real answer.
+
   ---
 
   ## 3. Recommended architecture

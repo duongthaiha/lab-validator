@@ -124,3 +124,81 @@ def test_console_hardening_survives_a_stream_that_refuses(monkeypatch):
 
     monkeypatch.setattr(cli.sys, "stdout", Stubborn())
     cli._console_utf8()  # must not raise
+
+
+# ---- the outline a run was actually walked against ------------------------
+#
+# artifacts/instructions/ is shared and the next walk overwrites it. Reading it
+# for an older run would enumerate a different lab's tasks and answer with
+# complete confidence -- worse than answering nothing, because a wrong answer
+# nobody can see is wrong is how a validator stops being worth running.
+
+
+def _run_with_corpus(tmp_path, body: str):
+    import hashlib
+
+    from lab_validator.corpus import Heading, Outline
+    from lab_validator.runlog import Run, Segment
+
+    shared = tmp_path / "artifacts"
+    shared.mkdir()
+    md = shared / "outline.md"
+    md.write_text(body, encoding="utf-8")
+    Outline(title="Demo", headings=[
+        Heading(order=0, level=1, id="setup", text="Setup"),
+        Heading(order=1, level=3, id="task-1", text="1. Do the thing"),
+    ]).save(shared / "outline.json")
+
+    run = Run.create(
+        tmp_path / "runs", "Demo", lab={"id": 1}, instance="i", agent="t",
+        corpus=md, segments=[Segment(id="s00", title="Setup", anchor="setup")],
+    )
+    assert run.manifest["corpus"]["sha256"] == hashlib.sha256(md.read_bytes()).hexdigest()
+    return run, md
+
+
+def test_the_run_local_outline_is_preferred(tmp_path):
+    from lab_validator.corpus import Heading, Outline
+
+    run, md = _run_with_corpus(tmp_path, "shared")
+    Outline(title="Local", headings=[
+        Heading(order=0, level=1, id="setup", text="Setup"),
+    ]).save(run.dir / "outline.json")
+
+    outline, why = cli._outline_for(run)
+
+    assert outline.title == "Local", "the run's own copy is evidence; the shared one is not"
+    assert why == ""
+
+
+def test_an_overwritten_shared_outline_is_refused_not_used(tmp_path):
+    run, md = _run_with_corpus(tmp_path, "the lab this run walked")
+
+    md.write_text("a completely different lab", encoding="utf-8")
+    outline, why = cli._outline_for(run)
+
+    assert outline is None, (
+        "enumerating another lab's tasks would produce confident nonsense; refusing "
+        "is the only honest answer"
+    )
+    assert "different lab" in why
+
+
+def test_an_unchanged_shared_outline_is_still_usable(tmp_path):
+    run, md = _run_with_corpus(tmp_path, "the lab this run walked")
+
+    outline, why = cli._outline_for(run)
+
+    assert outline is not None and why == ""
+
+
+def test_a_run_with_no_corpus_says_so_rather_than_guessing(tmp_path):
+    from lab_validator.runlog import Run, Segment
+
+    run = Run.create(tmp_path, "Demo", lab={"id": 1}, instance="i", agent="t",
+                     segments=[Segment(id="s00", title="Setup")])
+
+    outline, why = cli._outline_for(run)
+
+    assert outline is None
+    assert "no corpus" in why
