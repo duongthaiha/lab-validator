@@ -298,6 +298,69 @@ def test_an_enrolment_id_absent_from_the_page_is_not_silently_replaced():
     assert "not on this page" in r.reason
 
 
+# --- an enrolment's own page ----------------------------------------------
+#
+# `/ClassEnrollment/<id>` is what `Enrolment.url` hands out and what a human
+# copies from the address bar -- and that page does not link to *itself*, so
+# `parse_enrolments` finds nothing on it. Three live runs died here: the tool
+# refused the very URL its own output recommends. The URL-trusting branch has
+# to run before the empty-page refusal, or trusting the URL is not real.
+
+#: The enrolment's own page, as observed live: no /ClassEnrollment/ anchors at
+#: all, and one link to the lab it launches.
+OWN_PAGE = [
+    {"text": "Home", "href": "/"},
+    {"text": "Azure AI: Platform and Services",
+     "href": "/Lab/79233?instructionSetLang=en&classId=763682"},
+]
+
+
+def test_an_enrolments_own_page_resolves_to_that_enrolment():
+    r = resolve(OWN_PAGE, "https://mslearningcampus.com/ClassEnrollment/5928204",
+                "WorkshopPLUS - Azure AI Platform and Services")
+    assert r.ok, r.reason
+    assert r.enrolment.enrolment == 5928204
+    assert r.enrolment.lab_id == 79233
+    assert r.enrolment.class_id == 763682
+    assert "its own page" in r.reason
+
+
+def test_the_lab_link_names_the_lab_rather_than_the_name_we_were_given():
+    """--name only had to disambiguate, and the URL already did that. What the
+    page calls the lab is the observation; --name is the caller's label."""
+    r = resolve(OWN_PAGE, "https://mslearningcampus.com/ClassEnrollment/5928204",
+                "whatever the human typed")
+    assert r.enrolment.title == "Azure AI: Platform and Services"
+
+
+def test_a_signed_out_enrolment_page_refuses_rather_than_inventing_one():
+    """Signed out, the page still has the enrolment id in the URL but offers no
+    lab. Returning an enrolment nobody can launch would fail later and further
+    away, where the cause is no longer visible."""
+    r = resolve([{"text": "Sign in", "href": "/User/Login"}],
+                "https://mslearningcampus.com/ClassEnrollment/5928204", "Azure AI")
+    assert not r.ok
+    assert "no lab to launch" in r.reason
+    assert "signed out" in r.reason
+
+
+def test_a_url_shaped_like_an_enrolment_but_with_no_lab_link_refuses():
+    """The id in the URL is not on its own evidence that this is that
+    enrolment's page."""
+    r = resolve([{"text": "Some article", "href": "/Blog/1"}],
+                "https://mslearningcampus.com/ClassEnrollment/5928204", "Azure AI")
+    assert not r.ok
+
+
+def test_an_enrolment_listed_on_the_page_still_wins_over_the_own_page_path():
+    """Both branches can match; the parsed enrolment carries more than a lab
+    link does, so the order between them must not drift."""
+    links = CATALOGUE + [{"text": "Azure AI", "href": "/Lab/79233?classId=763682"}]
+    r = resolve(links, "https://mslearningcampus.com/ClassEnrollment/5928204", "Azure AI")
+    assert r.ok
+    assert r.reason == "the URL names enrolment 5928204"
+
+
 # --- Target.from_url: the descriptor stops being a precondition -----------
 
 

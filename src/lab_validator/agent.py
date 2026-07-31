@@ -78,6 +78,21 @@ DEFAULT_TURN_TIMEOUT = 900.0
 #: is noise -- a model can spend a turn reading. Three in a row is a loop that
 #: has stopped making progress, and continuing burns lab clock for nothing.
 STALL_LIMIT = 3
+#: Consecutive model turns that outlast ``--turn-timeout`` before we stop. A
+#: PERFORM that drives a VM through a portal sign-in can legitimately take
+#: longer than its budget, and the steps it recorded are on disk either way --
+#: so one timeout is slowness, not failure. Two in a row is a wedged session,
+#: and waiting a third budget proves nothing.
+TIMEOUT_LIMIT = 2
+
+#: How a closed lab announces itself in a mechanical move's output. `lab_step`
+#: refuses and prints this; the loop recognises it and stops rather than
+#: retrying, because the lab is not coming back on its own.
+#:
+#: Matched on the message, not on the exit code, because `_do_mechanical`
+#: deliberately returns what the command *said* -- the diagnosis a human reads
+#: -- and adding a second channel would let the two disagree.
+LAB_CLOSED_MARK = "has ended, so nothing observed from here is evidence"
 
 
 class AgentUnavailable(RuntimeError):
@@ -382,13 +397,15 @@ class Progress:
     turns: int = 0
     mechanical: int = 0
     stalls: int = 0
+    timeouts: int = 0
     moves: list[str] = field(default_factory=list)
     stopped: str = ""
 
     def summary(self) -> str:
+        timed_out = f", {self.timeouts} timed-out turn(s)" if self.timeouts else ""
         return (
             f"{self.turns} model turn(s), {self.mechanical} mechanical move(s), "
-            f"{self.stalls} stall(s). {self.stopped}"
+            f"{self.stalls} stall(s){timed_out}. {self.stopped}"
         )
 
 
@@ -400,6 +417,7 @@ async def drive(
     tools: Tools | None = None,
     minutes: Callable[[], int | None] | None = None,
     max_turns: int = 200,
+    turn_timeout: float = DEFAULT_TURN_TIMEOUT,
     say: Callable[[str], None] = print,
 ) -> Progress:
     """Walk the run to completion, asking ``ask`` only where judgement is needed.
@@ -408,12 +426,16 @@ async def drive(
     testable without an SDK process or a browser: the interesting failures are a
     model that lies about progress and a move that should never have reached a
     model at all, and neither needs a real one to reproduce.
+
+    ``turn_timeout`` is not enforced here -- ``ask`` owns that -- but the loop
+    is told what it is so it can say how long a timed-out turn was given.
     """
     tools = tools or Tools(run.dir)
     progress = Progress()
     last_mechanical = ""
     repeats = 0
     last_output = ""
+    consecutive_timeouts = 0
 
     # Which credentials the lab issued, by label. `next_move` needs these to
     # spot an instruction that is *asking* for one ("sign in with the username
@@ -460,13 +482,54 @@ async def drive(
                 )
                 return progress
             last_output = _do_mechanical(move, tools, say)
+            if LAB_CLOSED_MARK in last_output:
+                # Not a stall. A stall is "this keeps failing"; this is "the
+                # thing under test has gone". Grinding three more moves out of
+                # a closed lab costs time and writes trace nobody can use, and
+                # the run reads afterwards as though the lab were at fault.
+                progress.stopped = (
+                    f"The lab has closed. {last_output.strip()}\n"
+                    "Nothing observed after this point is evidence about the "
+                    "lab. Sections already walked keep their reports; the rest "
+                    "are unknown, not correct. Launch the lab again and resume "
+                    "with `lab-validator auto --run <dir>`."
+                )
+                return progress
             progress.mechanical += 1
             continue
 
         last_mechanical = ""
         before = Fingerprint.take(run, move.segment_id, outline)
         shot = tools.look(move.segment_id, label=f"{move.action}-{move.segment_id}")
-        await ask(move, shot)
+        try:
+            await ask(move, shot)
+        except TimeoutError:
+            # A turn that outlasts its budget is slow, not broken. The steps it
+            # recorded are already on disk, the loop re-derives the next move
+            # from the folder rather than from the model's memory, and the run
+            # is resumable -- so dying here would throw away a walk that is
+            # still valuable. It used to surface as a traceback ending inside
+            # the SDK, which reads as "the tool crashed" when the agent was
+            # part-way through signing into a portal and working correctly.
+            consecutive_timeouts += 1
+            progress.timeouts += 1
+            say(
+                f"  (that turn outlasted its {turn_timeout:.0f}s budget - "
+                f"timeout {consecutive_timeouts}/{TIMEOUT_LIMIT}; "
+                "anything it recorded is kept)"
+            )
+            if consecutive_timeouts >= TIMEOUT_LIMIT:
+                progress.stopped = (
+                    f"{consecutive_timeouts} model turns in a row outlasted the "
+                    f"{turn_timeout:.0f}s budget while {move.action} "
+                    f"{move.segment_id} was outstanding. Raise --turn-timeout if "
+                    "the moves are simply long; the sections already walked keep "
+                    "their reports, and this run can be resumed with "
+                    "`lab-validator auto --run <dir>`."
+                )
+                return progress
+        else:
+            consecutive_timeouts = 0
         progress.turns += 1
         after = Fingerprint.take(run, move.segment_id, outline)
 
@@ -745,7 +808,8 @@ async def run_agent(
 
         return await drive(
             run, ask, outline=outline, tools=tools,
-            minutes=minutes, max_turns=max_turns, say=say,
+            minutes=minutes, max_turns=max_turns,
+            turn_timeout=turn_timeout, say=say,
         )
     finally:
         await client.stop()

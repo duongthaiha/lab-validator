@@ -30,6 +30,7 @@ __all__ = [
     "slugify",
     "parse_enrolments",
     "resolve",
+    "enrolment_from_own_page",
     "scaffold",
     "descriptor_for",
 ]
@@ -40,6 +41,10 @@ ENROLMENT_RE = re.compile(r"/ClassEnrollment/(\d+)\b", re.I)
 CLASS_RE = re.compile(r"/Class(?:Details)?/(\d+)\b|[?&]classId=(\d+)\b", re.I)
 #: ``/LabProfile/79233``, ``labProfileId=79233`` -- the lab *profile* id.
 LAB_RE = re.compile(r"/LabProfile/(\d+)\b|[?&]labProfileId=(\d+)\b", re.I)
+#: ``/Lab/79233?instructionSetLang=en&classId=763682`` -- the launch link on an
+#: enrolment's own page. Anchored on ``/Lab/`` + digits so ``/LabProfile/79233``
+#: cannot match it.
+LAB_PAGE_RE = re.compile(r"/Lab/(\d+)\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -178,6 +183,37 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
+def enrolment_from_own_page(enrolment: int, links: list[dict], name: str) -> Enrolment | None:
+    """Build the enrolment for a page that *is* that enrolment's page.
+
+    ``/ClassEnrollment/<id>`` is the entry point this module's own
+    ``Enrolment.url`` hands out, and the one a human copies from the address
+    bar -- but the page does not link to itself, so ``parse_enrolments`` finds
+    nothing there and the caller used to refuse the very URL it recommends.
+
+    The evidence that this really is such a page is the launch link,
+    ``/Lab/<labId>?...classId=<classId>``. Requiring it means a signed-out page,
+    or some unrelated page whose URL merely contains the path, still refuses --
+    an enrolment nobody could launch is not one worth returning.
+    """
+    for link in links:
+        href = (link.get("href") or "").strip()
+        lab_id = _first_group(LAB_PAGE_RE.search(href))
+        if lab_id is None:
+            continue
+        observed = _clean_title(link.get("text") or "")
+        return Enrolment(
+            enrolment=enrolment,
+            # The link text names the lab; --name is the fallback, since here it
+            # is only a label -- the URL already did the disambiguating.
+            title=observed or _clean_title(name),
+            href=href,
+            class_id=_first_group(CLASS_RE.search(href)),
+            lab_id=lab_id,
+        )
+    return None
+
+
 def resolve(links: list[dict], url: str, name: str) -> Resolution:
     """Pick the one enrolment a ``--url`` + ``--name`` pair identifies.
 
@@ -191,20 +227,36 @@ def resolve(links: list[dict], url: str, name: str) -> Resolution:
     function's most valuable answer is that it could not tell.
     """
     enrolments = parse_enrolments(links)
-    if not enrolments:
-        return Resolution(None, [], "no launchable enrolment found on that page")
 
+    # Trusting the URL has to come *before* refusing for want of links on the
+    # page, or the trust is not real: an enrolment's own page lists no
+    # enrolments, so the check below would reject it before this branch ran.
     from_url = _first_group(ENROLMENT_RE.search(url))
     if from_url is not None:
         exact = [e for e in enrolments if e.enrolment == from_url]
         if exact:
             return Resolution(exact[0], exact, f"the URL names enrolment {from_url}")
+        standing = enrolment_from_own_page(from_url, links, name)
+        if standing is not None:
+            return Resolution(
+                standing, [standing],
+                f"the URL names enrolment {from_url}, and this is its own page",
+            )
+        if not enrolments:
+            return Resolution(
+                None, [],
+                f"the URL names enrolment {from_url}, but the page offers no lab to "
+                "launch -- the session may be signed out",
+            )
         return Resolution(
             None,
             enrolments,
             f"the URL names enrolment {from_url}, which is not on this page -- "
             "the session may be signed out, or the enrolment may belong to another account",
         )
+
+    if not enrolments:
+        return Resolution(None, [], "no launchable enrolment found on that page")
 
     wanted = _norm(name)
     if not wanted:

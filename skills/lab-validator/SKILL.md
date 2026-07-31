@@ -173,7 +173,6 @@ into a bug.
 
 ```powershell
 lab-validator next                            # what to do now, and why
-lab-validator run --next                      # the next unwalked section
 lab-validator text --segment s04 --tasks      # the numbered tasks in it
 lab-validator text --segment s04              # the full text
 ```
@@ -298,6 +297,34 @@ Retract anything that does not survive re-checking:
 
 ```powershell
 lab-validator run --retract <seq> --note "Re-checked on a fresh instance; the menu is present. Withdrawn."
+```
+
+---
+
+## If the lab closes while you are walking it
+
+A Skillable lab that ends **keeps its tab, its title, its `/LabClient/<guid>`
+URL and all three of its frames.** Only the top-level text changes, to *Lab
+Closed*. Every identity check still passes, so this looks like nothing at all.
+
+Any step run against a closed lab now refuses:
+
+```
+!! The lab client says: 'Lab Closed'. Instance <id> has ended, so nothing
+   observed from here is evidence about the lab.
+```
+
+It records one `BLOCKED` step and exits **4**. `auto` stops on it immediately.
+
+**Do not file findings about what you saw after this.** A lab that has ended is
+not a defect in the lab: the instruction pane that will not scroll is dead, not
+broken, and the wait that never completed had nothing to wait for. Sections
+already walked keep their reports; **the rest are unknown, not correct.**
+
+Ask the human to launch the lab again, then resume the same run:
+
+```powershell
+lab-validator auto --run <run folder>
 ```
 
 ---

@@ -9,6 +9,7 @@ up after 60 seconds and discards an hour of setup is worse than one that waits.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from lab_validator.launch import (  # noqa: E402
     SignInTimeout,
     await_lab_client,
     ensure_signed_in,
+    find_launch,
     signed_out,
     wait_for,
 )
@@ -257,3 +259,149 @@ async def test_waiting_for_the_client_reports_ambiguity_instead_of_timing_out_bl
     with pytest.raises(SignInTimeout, match="lab client tabs are open"):
         await await_lab_client(FakeContext(A, B), budget_s=10, say=lambda _: None,
                                sleep=clock.sleep, clock=clock)
+
+
+# --- finding the Launch control -------------------------------------------
+#
+# The live enrolment page marks every button `aria-label="<lab title>"`, which
+# *overrides* `value="Launch"` for the accessible name. So Launch, Resume and
+# Cancel all answer to the same accessible name, and none of them answers to
+# "Launch". `get_by_role(name="Launch")` therefore matched nothing on the one
+# page the whole capability starts from, and three live runs died there.
+#
+# These fakes reproduce that split: `role_name` is what ARIA says, `label` is
+# what the learner reads off the screen.
+
+
+class FakeElement:
+    def __init__(self, label, *, role="button", role_name=None,
+                 tag="input", visible=True, enabled=True):
+        self.label = label
+        self.role = role
+        #: what `get_by_role(name=...)` would match -- aria-label when present.
+        self.role_name = label if role_name is None else role_name
+        self.tag = tag
+        self.visible = visible
+        self.enabled = enabled
+
+
+class FakeLocator:
+    def __init__(self, matches):
+        self.matches = list(matches)
+
+    def or_(self, other):
+        merged = list(self.matches)
+        for element in other.matches:
+            if element not in merged:
+                merged.append(element)
+        return FakeLocator(merged)
+
+    async def count(self):
+        return len(self.matches)
+
+    def nth(self, i):
+        return FakeLocator([self.matches[i]])
+
+    async def is_visible(self):
+        return self.matches[0].visible
+
+    async def is_enabled(self):
+        return self.matches[0].enabled
+
+
+class FakeLaunchPage:
+    def __init__(self, *elements):
+        self.elements = list(elements)
+
+    def get_by_role(self, role, *, name, exact=False):
+        return FakeLocator(
+            e for e in self.elements
+            if e.role == role and name.lower() in e.role_name.lower()
+        )
+
+    def locator(self, selector):
+        # Mirrors what `_by_visible_label` builds: input[value*="X" i]. Reading
+        # the wanted text back out of the selector keeps the fake honest -- a
+        # locator built against `role_name` would silently pass.
+        #
+        # Every comma-separated clause is checked, not just the first match in
+        # the string. The earlier version searched the whole selector for one
+        # `value*="..."`, so switching the *button* clause to `aria-label` still
+        # found the submit clause's `value` and passed -- a fake that agrees
+        # with the bug it was written to catch.
+        assert "aria-label" not in selector, (
+            "the visible-label locator is selecting on ARIA. ARIA is what lied: "
+            f"every control on the live page answered to the lab's title. {selector}"
+        )
+        wanted = set()
+        for clause in selector.split(","):
+            match = re.search(r'value\*="([^"]+)"', clause)
+            assert match, f"clause does not select on the visible value: {clause!r}"
+            wanted.add(match.group(1).lower())
+        assert len(wanted) == 1, f"clauses disagree on the label: {sorted(wanted)}"
+        text = wanted.pop()
+        return FakeLocator(
+            e for e in self.elements
+            if e.tag == "input" and text in e.label.lower()
+        )
+
+
+LIVE_TITLE = "Azure AI: Platform and Services"
+
+
+def live_enrolment_page():
+    """The real enrolment page, as observed."""
+    return FakeLaunchPage(
+        FakeElement("Launch", role_name=LIVE_TITLE, visible=True),
+        FakeElement("Launch", role_name=LIVE_TITLE, visible=False),   # resume
+        FakeElement("Cancel", role_name=LIVE_TITLE, visible=False),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_launch_button_is_found_though_aria_calls_it_something_else():
+    """The live defect: the learner sees Launch, ARIA says the lab's title."""
+    control, reason = await find_launch(live_enrolment_page(), say=lambda _: None)
+    assert control is not None, reason
+    assert "Launch" in reason
+
+
+@pytest.mark.asyncio
+async def test_the_accessible_name_still_works_when_it_is_the_visible_one():
+    """Most pages label buttons honestly; that path must not regress."""
+    page = FakeLaunchPage(FakeElement("Launch Lab", tag="button"))
+    control, _ = await find_launch(page, say=lambda _: None)
+    assert control is not None
+
+
+@pytest.mark.asyncio
+async def test_a_hidden_launch_is_reported_as_not_ready_not_as_absent():
+    """A countdown-gated Launch means 'wait', and a page with no Launch at all
+    means something else entirely. Collapsing them loses the difference."""
+    page = FakeLaunchPage(
+        FakeElement("Launch", role_name=LIVE_TITLE, visible=False),
+    )
+    control, reason = await find_launch(page, say=lambda _: None)
+    assert control is None
+    assert "not ready yet" in reason
+
+
+@pytest.mark.asyncio
+async def test_a_page_with_no_launch_control_says_so_plainly():
+    page = FakeLaunchPage(FakeElement("Sign out", tag="a", role="link"))
+    control, reason = await find_launch(page, say=lambda _: None)
+    assert control is None
+    assert reason == "no launch control on this page"
+
+
+@pytest.mark.asyncio
+async def test_the_clickable_one_is_chosen_over_the_hidden_one_beside_it():
+    """Resume sits next to Launch and is hidden; picking by position would
+    take whichever the markup happened to put first."""
+    page = FakeLaunchPage(
+        FakeElement("Launch", role_name=LIVE_TITLE, visible=False),
+        FakeElement("Launch", role_name=LIVE_TITLE, visible=True),
+    )
+    control, _ = await find_launch(page, say=lambda _: None)
+    assert control is not None
+    assert await control.is_visible()

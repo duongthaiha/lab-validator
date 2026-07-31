@@ -11,6 +11,7 @@ exists and exposes the entry point the dispatcher calls.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -202,3 +203,89 @@ def test_a_run_with_no_corpus_says_so_rather_than_guessing(tmp_path):
 
     assert outline is None
     assert "no corpus" in why
+
+
+# --- the next-step hint ----------------------------------------------------
+#
+# Every command that finishes a stage tells the human what to do next, and that
+# hint is the path most people will take. `walk` -- the primary entry point --
+# was still pointing at `run --next`, the older reader that was deliberately
+# dropped from the skill for agreeing when it should refuse, while `scope`
+# beside it pointed at `next`. Two hints, two answers, and the more visible one
+# was the worse one.
+
+#: Every `lab-validator <verb>` the CLI puts in front of a human, wherever it is
+#: built. The first version of this scraper required a literal `next: ` or `or: `
+#: prefix, so it read the two `print` calls and missed
+#: `hint = f"lab-validator next --run ..."` on the line above -- the exact line
+#: that had been wrong. A guard written after the fix, and tested only against
+#: the fix, will happily agree with the bug. The lookbehind keeps
+#: `skills/lab-validator` (a path, not a command) out.
+HINT = re.compile(r"(?<![\w/-])lab-validator ([a-z-]+)")
+
+#: The reader that was dropped from the skill for agreeing when it should
+#: refuse. `run` is still a builtin, so "names a real command" cannot catch it.
+DEPRECATED_READER = "run --next"
+
+
+
+def _hints() -> list[str]:
+    source = (ROOT / "src" / "lab_validator" / "cli.py").read_text(encoding="utf-8")
+    return HINT.findall(source)
+
+
+def test_the_cli_hints_at_something_at_all():
+    """Guards the guard: a scraper that finds nothing passes every assertion
+    below it."""
+    assert _hints(), "no next-step hints found -- the pattern has drifted"
+
+
+@pytest.mark.parametrize("verb", sorted(set(_hints())))
+def test_every_next_step_hint_names_a_real_builtin(verb):
+    assert verb in cli.BUILTINS, (
+        f"the CLI tells the human to run `lab-validator {verb}`, which is not a "
+        f"built-in command. Known: {sorted(cli.BUILTINS)}"
+    )
+
+
+def test_no_hint_sends_the_human_to_the_reader_that_agrees():
+    """The live defect, named directly.
+
+    `walk` -- the primary entry point, and so the most-read hint in the tool --
+    pointed at `lab-validator run --next` while `scope` beside it pointed at
+    `next`. Both commands exist and both run, so nothing failed; one of them
+    simply agrees where the other refuses, and the more visible hint was the
+    worse one.
+    """
+    source = (ROOT / "src" / "lab_validator" / "cli.py").read_text(encoding="utf-8")
+    assert DEPRECATED_READER not in source, (
+        f"cli.py still points somebody at `lab-validator {DEPRECATED_READER}`"
+    )
+
+
+#: The two commands that continue an existing walk. Both work; only one of them
+#: refuses when it should. Named explicitly rather than by excluding everything
+#: else, because `scope` and `walk` are also legitimately suggested and an
+#: exclusion list quietly grows until it excludes the thing under test.
+CONTINUATIONS = {"next", "run"}
+
+
+def test_the_continuation_commands_are_real():
+    """Guards the guard: a set naming commands that do not exist filters to
+    nothing, and an empty filter satisfies every assertion made about it.
+
+    Checked against everything the dispatcher accepts, not just the builtins:
+    `run` is delegated to a script, which is exactly why pointing a human at it
+    looked harmless.
+    """
+    dispatchable = set(cli.BUILTINS) | set(cli.COMMANDS)
+    assert CONTINUATIONS <= dispatchable, sorted(dispatchable)
+
+
+def test_the_hints_do_not_send_two_people_down_two_paths():
+    """Whichever reader is chosen, every hint must agree on it."""
+    forward = {v for v in _hints() if v in CONTINUATIONS}
+    assert forward, "the CLI never says how to continue a walk"
+    assert len(forward) == 1, (
+        f"the CLI recommends more than one way to continue a walk: {sorted(forward)}"
+    )

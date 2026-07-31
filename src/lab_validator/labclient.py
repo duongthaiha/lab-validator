@@ -41,6 +41,175 @@ def instance_id_of(url: str) -> str:
     return m.group(1) if m else "?"
 
 
+class LabClosed(BrowserError):
+    """The lab client is still open, but the lab behind it has ended."""
+
+
+#: What the product puts on the page when a lab instance ends, and where each
+#: wording came from. Provenance is recorded because the project's rule is not
+#: to invent: a guessed marker that fires is a confident claim resting on
+#: nothing, and a reader has no way to tell the two apart from the tuple alone.
+#:
+#: Observed live: the tab stays open, keeps its title, keeps its
+#: ``/LabClient/<guid>`` URL and still lists the console and instructions frames
+#: -- and shows "Lab Closed / Your lab has been closed." with a Close Window
+#: button.
+#:
+#: This is what a learner sees, which is the point. Everything the tool checked
+#: to identify the lab (tab present, URL right, instance id right, frames
+#: present) remained true after the lab ended, so the walk carried on: it filed
+#: a *major* defect saying the instruction pane would not scroll -- the pane was
+#: dead, not defective -- and recorded three PASS steps for work done against
+#: nothing. Identity was never the problem here; liveness was.
+MARKER_PROVENANCE: dict[str, str] = {
+    "lab closed": "observed — the heading on the ended lab, 2026-07-31",
+    "your lab has been closed": "observed — the body text beneath it, 2026-07-31",
+    # A guess. Kept because the cost of a miss is high (the walk carries on
+    # against nothing) and the cost of a false match is low (this reads the
+    # client's own chrome, not the lab's prose). Labelled so nobody later
+    # mistakes it for something the product was seen to say.
+    "this lab has ended": "unverified — a plausible variant, never seen",
+}
+
+CLOSED_MARKERS = tuple(MARKER_PROVENANCE)
+
+
+async def closed_reason(page) -> str | None:
+    """What the *top-level* client says, if it says the lab has ended.
+
+    Read from the main frame only. The instructions frame carries the lab's own
+    prose, which can say anything at all -- including "lab closed" -- and using
+    it here would let a lab's own text end its own walk.
+
+    A page that cannot be read at all is not reported as closed: an unreadable
+    page is a different failure with a different fix, and guessing between them
+    would produce exactly the confident wrong answer this check exists to stop.
+
+    Blind spot, stated: this only recognises wordings in ``MARKER_PROVENANCE``.
+    A lab that ends with words nobody has seen will not be caught here, and the
+    walk will carry on exactly as it did before this check existed.
+    """
+    try:
+        text = await page.main_frame.inner_text("body")
+    except Exception:  # noqa: BLE001 - a dead page is not evidence of closure
+        return None
+    lowered = " ".join(text.lower().split())
+    for marker in CLOSED_MARKERS:
+        if marker in lowered:
+            return text.strip().splitlines()[0].strip() if text.strip() else marker
+    return None
+
+
+#: Sub-pixel layout rounding routinely makes scrollHeight exceed clientHeight by
+#: a pixel or two on content that visibly fits.
+SCROLL_SLACK = 4
+
+
+@dataclass(frozen=True)
+class Scrolled:
+    """What a learner's scroll of the instruction pane actually did.
+
+    Three outcomes need telling apart and the old ``int`` return could only
+    tell two. A section short enough to fit its pane *cannot* scroll and is not
+    defective; a pane whose content overflows but will not move is the defect
+    worth reporting. Collapsing them files a major finding against every short
+    section in the lab -- which is precisely what the first live run did.
+    """
+
+    before: int
+    after: int
+    #: how much content sits beyond the scroller's viewport, in pixels
+    overflow: int
+    #: what was measured, so a wrong guess at the scroller shows up in the
+    #: evidence instead of hiding inside a verdict
+    where: str
+    #: whether the text under a fixed point in the pane changed
+    view_changed: bool
+
+    @property
+    def moved(self) -> bool:
+        """The learner's own criterion: did the pane show something new?
+
+        Offset *or* view, because either alone can lie. A pane can scroll an
+        inner element whose offset we failed to find, and a pane can report an
+        offset change while rendering nothing new.
+        """
+        return self.after != self.before or self.view_changed
+
+    @property
+    def scrollable(self) -> bool:
+        return self.overflow > SCROLL_SLACK
+
+    @property
+    def stuck(self) -> bool:
+        """There is more to read, and the learner cannot reach it."""
+        return self.scrollable and not self.moved
+
+    def describe(self) -> str:
+        if self.stuck:
+            return (
+                f"instruction pane did not scroll: {self.where} stayed at "
+                f"scrollTop {self.before} with {self.overflow}px of content below "
+                "the fold, and the view did not change. A learner reading this "
+                "section by hand would be stuck."
+            )
+        if not self.scrollable:
+            return f"nothing to scroll: {self.where} holds no content beyond its viewport"
+        return (
+            f"{self.where} scrolled {self.before} -> {self.after} "
+            f"of {self.overflow}px"
+        )
+
+
+#: Find the element the pane actually scrolls, mark it so the wheel can be aimed
+#: at it, and sample what the learner can see. Two things this replaces were
+#: both wrong in the same direction -- silently reporting a healthy pane as
+#: broken. ``document.scrollingElement`` is only the scroller when the document
+#: itself scrolls, and a pane built as a ``div`` with ``overflow-y: auto``
+#: leaves it pinned at 0 forever; and hovering the frame's ``body`` aims the
+#: wheel at ``body``'s box, which on this product is a 101px strip *above* the
+#: instruction pane, so the wheel went to the tab bar.
+_SCROLL_PROBE = """() => {
+  const slack = __SLACK__;
+  const scrollers = [...document.querySelectorAll('*')].filter(el => {
+    const style = getComputedStyle(el);
+    return /auto|scroll/.test(style.overflowY)
+        && el.scrollHeight - el.clientHeight > slack;
+  });
+  const doc = document.scrollingElement;
+  // The pane with the most content beyond its viewport is the one holding the
+  // instructions: chrome and toolbars overflow by a little, content by a lot.
+  scrollers.sort((a, b) =>
+    (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+  const el = scrollers[0] || doc;
+  document.querySelectorAll('[data-lv-scroller]')
+    .forEach(e => e.removeAttribute('data-lv-scroller'));
+  el.setAttribute('data-lv-scroller', '1');
+  const box = (el === doc)
+    ? {left: 0, top: 0, width: innerWidth, height: innerHeight}
+    : el.getBoundingClientRect();
+  const seen = document.elementFromPoint(
+    Math.round(box.left + box.width / 2),
+    Math.round(box.top + box.height / 2));
+  const name = (el === doc) ? 'document'
+    : el.tagName.toLowerCase()
+      + (el.id ? '#' + el.id : '')
+      + ((typeof el.className === 'string' && el.className.trim())
+         ? '.' + el.className.trim().split(/\\s+/).join('.') : '');
+  return {
+    top: Math.round(el.scrollTop),
+    overflow: Math.round(el.scrollHeight - el.clientHeight),
+    where: name,
+    seen: (seen ? seen.textContent || '' : '').replace(/\\s+/g, ' ').trim().slice(0, 160),
+  };
+}""".replace("__SLACK__", str(SCROLL_SLACK))
+
+_UNMARK_SCROLLER = (
+    "() => document.querySelectorAll('[data-lv-scroller]')"
+    ".forEach(e => e.removeAttribute('data-lv-scroller'))"
+)
+
+
 class LabClient:
     """A live Skillable lab instance."""
 
@@ -101,6 +270,23 @@ class LabClient:
     def instance_id(self) -> str:
         return instance_id_of(self.page.url)
 
+    async def ensure_open(self) -> None:
+        """Refuse to act on a lab that has ended.
+
+        Called before anything is recorded, because a step taken after the lab
+        closed is not weak evidence -- it is evidence of nothing at all, written
+        into a trace that reads exactly like evidence of something.
+        """
+        reason = await closed_reason(self.page)
+        if reason is None:
+            return
+        raise LabClosed(
+            f"The lab client says: {reason!r}. Instance {self.instance_id} has "
+            "ended, so nothing observed from here is evidence about the lab. "
+            "Sections already walked keep their reports; the rest are unknown, "
+            "not correct. Launch the lab again to continue."
+        )
+
     def _frame(self, marker: str) -> Frame:
         for f in self.page.frames:
             if marker in f.url:
@@ -138,8 +324,8 @@ class LabClient:
         )
         await self.page.wait_for_timeout(600)
 
-    async def scroll_instructions(self, delta: int = 600) -> int:
-        """Scroll the instruction pane the way a learner does, and say how far.
+    async def scroll_instructions(self, delta: int = 600) -> Scrolled:
+        """Scroll the instruction pane the way a learner does, and say what happened.
 
         :meth:`goto_page` is faster and exact, and that is the problem: it pages
         the pane through the API without ever touching the pane's own
@@ -147,16 +333,48 @@ class LabClient:
         invisible to a walk that only uses it. This is the control that closes
         that hole -- a real wheel event on the real element.
 
-        Returns the scroll offset afterwards, so a caller can tell the
-        difference between "scrolled" and "did nothing", which is the failure
-        actually worth catching.
+        Returns a :class:`Scrolled`, not an offset. The offset alone cannot tell
+        "there was nothing to scroll" from "the pane would not move", and only
+        one of those is a defect.
         """
-        await self.instructions.locator("body").hover()
-        await self.page.mouse.wheel(0, delta)
-        await self.page.wait_for_timeout(400)
-        return await self.instructions.evaluate(
-            "() => Math.round(document.scrollingElement?.scrollTop ?? 0)"
+        pane = self.instructions
+        first = await pane.evaluate(_SCROLL_PROBE)
+        try:
+            await self._wheel_over_scroller(pane, delta)
+            await self.page.wait_for_timeout(400)
+            second = await pane.evaluate(_SCROLL_PROBE)
+        finally:
+            await pane.evaluate(_UNMARK_SCROLLER)
+        return Scrolled(
+            before=first["top"],
+            after=second["top"],
+            # The larger of the two: a pane that scrolls can report a smaller
+            # overflow once lazily-rendered content settles, and understating it
+            # would turn a real defect into "nothing to scroll".
+            overflow=max(first["overflow"], second["overflow"]),
+            where=second["where"] or first["where"],
+            view_changed=first["seen"] != second["seen"],
         )
+
+    async def _wheel_over_scroller(self, pane: Frame, delta: int) -> None:
+        """Put the pointer inside the scroller, then turn the wheel.
+
+        A wheel event goes to whatever is under the pointer, so aiming is the
+        whole job. ``bounding_box()`` reports page coordinates, which is what
+        ``page.mouse`` wants, and the vertical offset is clamped so a pane taller
+        than the window is still aimed at somewhere visible.
+        """
+        box = await pane.locator("[data-lv-scroller]").first.bounding_box()
+        if box is None:
+            # Nothing measurable to aim at. Turning the wheel anyway would put
+            # the event somewhere arbitrary and the result would be read as
+            # evidence, so decline and let the caller see an unmoved pane.
+            return
+        await self.page.mouse.move(
+            box["x"] + box["width"] / 2,
+            box["y"] + min(box["height"], 400) / 2,
+        )
+        await self.page.mouse.wheel(0, delta)
 
     async def instructions_text(self) -> str:
         raw = await self.instructions.inner_text("body")

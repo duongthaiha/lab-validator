@@ -196,6 +196,36 @@ async def ensure_signed_in(
 # without a browser, and the policy decisions live up there.
 
 
+async def _clickable(one, label: str, say) -> bool:
+    try:
+        return await one.is_visible() and await one.is_enabled()
+    except Exception as exc:  # noqa: BLE001
+        # A node detached between count() and the check. That is the page
+        # re-rendering, not a defect, and the next poll re-reads it.
+        say(f"  (launch candidate {label!r} vanished mid-check: {type(exc).__name__})")
+        return False
+
+
+def _by_visible_label(page, label: str):
+    """Controls whose *visible* label reads ``label``, whatever ARIA calls them.
+
+    ``get_by_role(name=...)`` matches the accessible name, and on the enrolment
+    page every button carries ``aria-label="<lab title>"`` -- which overrides
+    ``value="Launch"``. The learner sees a button marked Launch; the
+    accessibility tree calls it "Azure AI: Platform and Services", as it does
+    the Resume and Cancel buttons beside it. Matching only on accessible name
+    therefore finds nothing on the one page that matters most.
+
+    ``value`` is checked with a substring match to mirror ``exact=False`` on the
+    role locators, so "Launch Lab" still matches a button marked "Launch".
+    """
+    escaped = label.replace("\\", "\\\\").replace('"', '\\"')
+    return page.locator(
+        f'input[type="button" i][value*="{escaped}" i], '
+        f'input[type="submit" i][value*="{escaped}" i]'
+    )
+
+
 async def find_launch(page, *, say=print):
     """The first launch control a *learner* could actually click.
 
@@ -204,23 +234,20 @@ async def find_launch(page, *, say=print):
     clickable, and the reason says so, because a hidden Launch is the product
     telling us the lab is not ready. ``--dump`` exists precisely because this
     control can be present and ``display:none``.
+
+    Two ways of naming a control are tried, because the product uses both: the
+    accessible name, and the visible label. See ``_by_visible_label`` for why
+    the second is not redundant.
     """
     hidden = 0
     for label in LAUNCH_LABELS:
         candidate = page.get_by_role("button", name=label, exact=False).or_(
             page.get_by_role("link", name=label, exact=False)
-        )
+        ).or_(_by_visible_label(page, label))
         count = await candidate.count()
         for i in range(count):
             one = candidate.nth(i)
-            clickable = False
-            try:
-                clickable = await one.is_visible() and await one.is_enabled()
-            except Exception as exc:  # noqa: BLE001
-                # A node detached between count() and the check. That is the
-                # page re-rendering, not a defect, and the next poll re-reads it.
-                say(f"  (launch candidate {label!r} vanished mid-check: {type(exc).__name__})")
-            if clickable:
+            if await _clickable(one, label, say):
                 return one, f"visible {label!r} control"
             hidden += 1
     if hidden:

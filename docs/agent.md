@@ -137,11 +137,34 @@ Every exit prints a sentence. Match its opening words here.
 | `<move> <segment> came back N times and the run did not move on` | a mechanical command is failing silently | the message quotes what that command last printed — that is the diagnosis, not a hint to reproduce it |
 | `3 consecutive turns changed nothing in the run folder` | the model is not making progress on a named task | the message names the outstanding task; open that section by hand |
 | `reached the N-move ceiling before the lab ended` | budget exhausted | re-run with `--run <folder>` to continue, or raise `--max-turns` |
+| `2 model turns in a row outlasted the Ns budget` | the model could not answer twice running | raise `--turn-timeout` if the moves are simply long; the run is resumable with `auto --run <folder>` |
 | `all N selected sections are accounted for ... Separately, M were not selected` | a scoped walk finished its scope | expected; the report says `**Scoped run.**` and can never answer YES. Widen with `lab-validator scope --run <folder> --sections ...` and re-run `auto --run <folder>` |
+| `The lab has closed.` | the lab instance ended while the walk was still running | **not a tool failure and not a lab defect.** Sections already walked keep their reports; the rest are **unknown, not correct**. Launch the lab again and resume with `auto --run <folder>` |
+
+A **single** slow turn is not a stop. It prints `(that turn outlasted its Ns
+budget - timeout 1/2; anything it recorded is kept)` and the walk carries on:
+the steps that turn recorded are already on disk, and the loop takes its next
+move from the run folder rather than from the model's memory, so a long turn
+costs time and nothing else. Two in a row is different — that is a model which
+cannot answer, and an unattended walk has nobody to notice. Before this
+distinction existed the first live run ended in a raw `TimeoutError` traceback
+whose last frame was inside the SDK, which read as *the tool crashed* while the
+agent had in fact been signing into a portal correctly for fifteen minutes.
 
 The two stall stops both end with the same sentence, and it is the important
 one: *sections already walked keep their reports; the rest are unknown, not
 correct.* A partial walk is a partial answer, never a clean bill of health.
+
+The closed-lab stop deserves its own note, because it is the one that looks
+like nothing. A Skillable lab that ends keeps its tab, its tab title, its
+`/LabClient/<guid>` URL and all three of its frames; only the top-level body
+text changes, to *Lab Closed*. Every identity check the tool has still passed,
+and on the run that found this the walk carried on for four more steps — filing
+a **major** finding that the instruction pane would not scroll (the pane was
+dead, not defective) and three `PASS` steps for work done against nothing.
+Every step now asks whether there is still a lab before it records anything,
+and the loop stops on the first refusal rather than grinding out its stall
+ceiling. See `docs/approach.md` §2.22.
 
 The commonest cause of the repeat stop, by some distance, is the controller
 browser not being there — the first real run stopped on a repeated `READ` with
@@ -306,13 +329,20 @@ blamed on the same cause.
 Stated plainly, because this project's whole argument is that unverified is not
 the same as working:
 
-- `auto` has never been run against a **real lab**. The synthetic smoke run
-  proved the SDK wiring; the `--url` path through `cmd_walk` into the agent, the
-  sign-in gate and Launch automation in `launch.py`, and
-  `LabClient.scroll_instructions()` have not been exercised end to end.
-- Everything above the SDK boundary — the loop, both stall guards, the deny
-  branch, redaction, prompt construction, credential threading — is covered by
-  tests and by the smoke run.
+- `auto` has now been run against a **real lab**, and that run is what produced
+  the timeout stop above and the corrected learner scroll. `walk --url` is proven
+  end to end: enrolment resolution, Launch (which turns out to be two-stage —
+  `/Setup/<guid>` self-advances to `/LabClient/<guid>` after ~4 minutes),
+  credential capture, preflight, review, scoping and the first agent moves.
+- **A section completing under `auto` against a real lab** is the piece still
+  outstanding. The runs so far ended on budget, not on error.
+- Everything above the SDK boundary — the loop, both stall guards, the timeout
+  guard, the deny branch, redaction, prompt construction, credential threading —
+  is covered by tests and by the smoke run.
 
-The first live `auto --url` run is the highest-value thing left to do, and needs
-a human present to sign in.
+The five defects the first live run exposed, and why none of the 600-odd tests
+could see them, are written up in
+[approach.md §2.21](approach.md#221-the-first-live-run-a-tool-that-invents-defects-is-worse-than-one-that-finds-none).
+The headline is worth repeating here: the tool filed a confident `major` finding
+about the *product* that was not true. Verify a first-run code path's first
+finding before publishing it.

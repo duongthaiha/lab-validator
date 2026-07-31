@@ -127,6 +127,13 @@ CAPABILITIES: dict[str, Capability] = {
         _cap("minutes_remaining", "bookkeeping", "api", False),
         _cap("page_index", "bookkeeping", "api", False),
         _cap("instance_id", "bookkeeping", "api", False),
+        # `ensure_open` reads what the learner would read off the screen -- the
+        # client's own "Lab Closed" panel -- but it is asking whether there is a
+        # lab to test at all, not testing anything. It acts on nothing, so it
+        # costs no coverage; classifying it as `labui` would let a liveness
+        # check masquerade as having exercised the lab's UI.
+        _cap("ensure_open", "bookkeeping", "dom", False,
+             "checks the lab has not ended before anything is recorded"),
     )
 }
 

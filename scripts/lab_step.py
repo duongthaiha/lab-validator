@@ -41,7 +41,11 @@ from lab_validator.imaging import (  # noqa: E402
     save_view,
     stability,
 )
-from lab_validator.labclient import LabClient  # noqa: E402
+from lab_validator.labclient import (  # noqa: E402
+    LabClient,
+    LabClosed,
+    closed_reason,
+)
 from lab_validator.learnerpath import Ledger
 from lab_validator.report import write_segment  # noqa: E402
 from lab_validator.runlog import DOMAINS, FINDING_VERDICTS, Run  # noqa: E402
@@ -121,6 +125,31 @@ async def capture(lab: LabClient, run: Run, segment: str, label: str) -> Path:
     return out
 
 
+async def _refuse_if_closed(lab: LabClient, run: Run, segment: str) -> None:
+    """Stop a long poll the moment the thing it is waiting on has gone.
+
+    Checked once per heartbeat rather than once per iteration: the cost of a
+    miss is bounded at fifteen seconds, and the cost of asking is a page read.
+
+    Without this a probe runs its whole budget against a closed lab and then
+    files `LAB007 ... did not complete within Ns` -- a **major** finding about a
+    lab that had already ended. Observed live in the reverse direction (a false
+    `LAB003` about a dead instruction pane), which is the same defect: a
+    measurement taken after the subject went away, published as a fact about
+    the subject.
+    """
+    reason = await closed_reason(lab.page)
+    if reason is None:
+        return
+    run.log(f"lab closed mid-step: {reason!r}")
+    raise LabClosed(
+        f"The lab client says: {reason!r}. It closed while this step was "
+        "waiting, so the wait proves nothing about the lab. Sections already "
+        "walked keep their reports; the rest are unknown, not correct. "
+        "Launch the lab again to continue."
+    )
+
+
 async def probe_quiet(lab: LabClient, run: Run, segment: str, arg: str, budget: float) -> bool:
     """Wait until the VM screen stops changing.
 
@@ -150,6 +179,7 @@ async def probe_quiet(lab: LabClient, run: Run, segment: str, arg: str, budget: 
                     return True
         if now - beat >= 15:
             beat = now
+            await _refuse_if_closed(lab, run, segment)
             run.heartbeat(
                 segment,
                 operation=f"quiet:{settle_ms}",
@@ -171,6 +201,7 @@ async def probe_connected(lab: LabClient, run: Run, segment: str, arg: str, budg
         now = time.monotonic()
         if now - beat >= 15:
             beat = now
+            await _refuse_if_closed(lab, run, segment)
             run.heartbeat(
                 segment,
                 operation="connected",
@@ -293,22 +324,22 @@ async def run_actions(
             # and exact, which is exactly why it is a bypass: it never touches
             # the pane's own navigation, so a pane that will not scroll reads as
             # a clean section.
-            before = await lab.instructions.evaluate(
-                "() => Math.round(document.scrollingElement?.scrollTop ?? 0)"
-            )
-            after = await lab.scroll_instructions(int(arg) if arg else 600)
-            if after == before:
+            scrolled = await lab.scroll_instructions(int(arg) if arg else 600)
+            if scrolled.stuck:
                 findings += 1
                 run.step(
                     segment, verdict="LAB003", severity="major", domain="setup",
                     action=f"read:{arg or 600}", surface="dom",
-                    note=(f"instruction pane did not scroll; scrollTop stayed at {before}. "
-                          "A learner reading this section by hand would be stuck."),
+                    note=scrolled.describe(),
                 )
-                print(f"  !! pane did not move at scrollTop {before}")
+                print(f"  !! {scrolled.describe()}")
             else:
+                # A section that fits its pane still counts as read the
+                # learner's way -- there was no scroll for the learner to be
+                # denied. Reporting it as a defect is how the first live run
+                # filed a major finding against a page that was simply short.
                 run.step(segment, action=f"read:{arg or 600}", surface="dom",
-                         note=f"scrollTop {before} -> {after}")
+                         note=scrolled.describe())
 
         elif verb == "shot":
             shot = await capture(lab, run, segment, arg or label)
@@ -326,6 +357,30 @@ async def main_async(args) -> int:
         try:
             lab = LabClient.find(context)
             await lab.page.bring_to_front()
+
+            # Before anything is recorded. A closed lab keeps its tab, its
+            # title, its /LabClient/<guid> URL and its frames, so every identity
+            # check still passes -- and the walk carries on writing steps about
+            # a lab that is not there. Observed live: a major "the instruction
+            # pane will not scroll" finding filed against a dead frame, then
+            # three PASS steps for work done against nothing.
+            try:
+                await lab.ensure_open()
+            except LabClosed as exc:
+                print(f"\n!! {exc}", file=sys.stderr)
+                run = Run.open(args.run) if args.run else Run.latest(RUNS)
+                if run is not None:
+                    segment = args.segment
+                    try:
+                        segment = run.resolve_segment(args.segment)
+                    except KeyError:
+                        pass
+                    run.step(
+                        segment, verdict="BLOCKED", severity="blocker",
+                        domain="setup", action="lab-closed", surface="dom",
+                        note=str(exc),
+                    )
+                return 4
 
             run = Run.open(args.run) if args.run else Run.latest(RUNS)
             if run is None:
@@ -349,6 +404,19 @@ async def main_async(args) -> int:
                 findings = await run_actions(
                     lab, run, args.segment, args.label, args.do or [], ledger
                 )
+            except LabClosed as exc:
+                # The lab ended *during* the step. Everything recorded before
+                # this point stands -- it was measured against a live lab --
+                # but the step did not finish, and saying so is the whole
+                # point: the alternative is a LAB007 major finding about a wait
+                # that could never have completed.
+                print(f"\n!! {exc}", file=sys.stderr)
+                run.step(
+                    args.segment, verdict="BLOCKED", severity="blocker",
+                    domain="setup", action="lab-closed", surface="dom",
+                    note=str(exc),
+                )
+                return 4
             finally:
                 ledger.save(run.dir)
 

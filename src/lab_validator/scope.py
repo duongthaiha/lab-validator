@@ -57,6 +57,12 @@ HOW_TO_CHOOSE = (
     "Ids work too ('s04', 's04..s06')."
 )
 
+#: The ``--sections`` flag's help text, in one place because it had already
+#: drifted into three: every ``--help`` still offered ids only, which is the one
+#: form nobody can type before a lab has been captured. Numbers lead for the
+#: same reason they lead in the prompt.
+SECTIONS_HELP = "which sections to walk: all | 4 | 1,4,7 | 4-6 | s04 | s04..s06"
+
 REVIEW_FILENAME = "review.md"
 
 

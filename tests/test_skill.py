@@ -114,6 +114,26 @@ def test_every_documented_flag_exists(doc, line):
     assert not unknown, f"{doc}: `lab-validator {command}` has no {unknown} (real: {sorted(real)})"
 
 
+#: Readers that still work but were dropped from the walk loop for agreeing when
+#: they should refuse. Every guard above passes on them -- `run` is a real
+#: command and `--next` is a real flag -- which is exactly why one survived in
+#: SKILL.md Step 5 long after being removed from the loop and from the CLI's
+#: own hints. A command being *valid* says nothing about it being the one to
+#: recommend, and nothing else here was asking that question.
+DEPRECATED_READERS = {("run", "--next")}
+
+
+@pytest.mark.parametrize("doc,line", documented())
+def test_no_doc_recommends_a_reader_that_was_dropped(doc, line):
+    parts = line.split()
+    command, flags = parts[0], {p for p in parts[1:] if p.startswith("--")}
+    for dropped_command, dropped_flag in DEPRECATED_READERS:
+        assert not (command == dropped_command and dropped_flag in flags), (
+            f"{doc} tells the reader to run `lab-validator {dropped_command} "
+            f"{dropped_flag}`, which was dropped in favour of `lab-validator next`"
+        )
+
+
 def test_documented_verdict_codes_are_real():
     from lab_validator.taxonomy import VERDICTS
 
@@ -408,3 +428,65 @@ def test_the_readme_shows_the_prompt_the_code_actually_prints():
     assert question in body, f"README does not show the real prompt: {question!r}"
     for example in re.findall(r"'([^']+)'", scope.PROMPT_HELP):
         assert f"'{example}'" in body, f"README omits the prompt's own example {example!r}"
+
+
+# `--help` is the doc nobody has to go looking for, and it drifted first: all
+# three copies still offered ids only, which is the one form nobody can type
+# before a lab has been captured.
+
+SECTIONS_COMMANDS = ["walk", "auto", "scope"]
+
+
+def _help_text(command: str, capsys) -> str:
+    """What `lab-validator <command> --help` actually prints.
+
+    Goes through `main()` and `sys.argv` rather than reaching for the parser,
+    because the parsers are built inline per command -- and the thing that
+    drifted was what a user sees, not what a constant says.
+    """
+    argv = sys.argv
+    sys.argv = ["lab-validator", command, "--help"]
+    try:
+        with pytest.raises(SystemExit):
+            cli.main()
+    finally:
+        sys.argv = argv
+    return capsys.readouterr().out
+
+
+@pytest.mark.parametrize("command", SECTIONS_COMMANDS)
+def test_every_sections_help_offers_the_numbers(command, capsys):
+    """`--help` must offer the form a first-time user can actually type.
+
+    Ids do not exist until a lab has been captured, so a help string listing
+    only `s01,s04` describes a flag nobody can use on a first run. One
+    constant, checked at the surface argparse prints rather than at the
+    constant, because the bug was three copies that had drifted apart.
+    """
+    from lab_validator import scope
+
+    # argparse rewraps help across lines; compare on collapsed whitespace.
+    printed = " ".join(_help_text(command, capsys).split())
+    expected = " ".join(scope.SECTIONS_HELP.split())
+    assert expected in printed, f"`{command} --help` does not show SECTIONS_HELP"
+
+
+@pytest.mark.parametrize("command", SECTIONS_COMMANDS)
+def test_every_example_in_the_sections_help_parses(command, capsys, tmp_path):
+    """Every example `--help` offers must be one the parser accepts.
+
+    Same property as the documented-syntax guard above, applied to the surface
+    a user reaches without opening a document.
+    """
+    from lab_validator import scope
+
+    printed = " ".join(_help_text(command, capsys).split())
+    body = printed.split("which sections to walk:", 1)[1]
+    body = body.split(".")[0] if "Omit" in body else body.split("--")[0]
+    examples = [e.strip() for e in body.split("|") if e.strip()]
+    assert len(examples) >= 4, f"`{command} --help` offers too few examples: {examples}"
+
+    run = _run_covering_documented_ids(tmp_path)
+    for example in examples:
+        selection = scope.parse(example, run)
+        assert selection.chosen, f"`{command} --help` offers `{example}`, which selects nothing"

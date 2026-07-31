@@ -704,3 +704,191 @@ def test_a_silent_command_is_reported_as_silent():
     """"" reads as "nothing happened" and as "nothing to say" alike."""
     quiet = subprocess.CompletedProcess(["x"], 0, "", "")
     assert agent._say(quiet).strip() != ""
+
+
+# --- a model turn that outlasts its budget ----------------------------------
+#
+# The first unattended live walk ended with a raw TimeoutError traceback whose
+# last frame was inside the SDK, so it read as "the SDK crashed" when in fact
+# the agent was part-way through signing into a portal and working correctly.
+# None of the tests above could see it: every one of them supplies an `ask`
+# that returns, so the except clause was never once evaluated. Mutating it to
+# `except _NeverRaised:` -- a name that does not exist -- left the whole suite
+# green, which is what unguarded code looks like from the inside.
+
+
+#: ``stopped`` also carries the ordinary terminal message, so "did not stop for
+#: timeouts" is not the same as "did not stop". Asserting the weaker thing is how
+#: a guard passes while the behaviour it guards is broken.
+TIMED_OUT = "outlasted"
+
+
+def test_a_slow_turn_does_not_end_the_walk(tmp_path):
+    """One turn over budget is slow, not broken.
+
+    The steps it recorded are already on disk and the loop re-derives its next
+    move from the folder rather than from the model's memory, so the walk can
+    simply carry on. Dying here throws away hours of a run that is still good.
+    """
+    run, outline = _run(tmp_path)
+    tools = FakeTools(run)
+    calls = {"n": 0}
+
+    async def ask(move, shot):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TimeoutError("model turn exceeded its budget")
+        run.step("s01", verdict="PASS", action="do",
+                 instruction_ref="#1-open-the-portal", note="did it")
+
+    progress = _drive(run, outline, ask, tools)
+
+    assert progress.timeouts == 1, "the timeout was not counted"
+    assert TIMED_OUT not in progress.stopped, (
+        f"one slow turn ended the walk: {progress.stopped}"
+    )
+    assert Run.open(run.dir).segments()[0].status == "done", (
+        "the section did not finish, so the slow turn was not absorbed"
+    )
+
+
+def test_two_slow_turns_in_a_row_stop_the_run(tmp_path):
+    """Absorbing one is judgement; absorbing every one is a hang.
+
+    A model that cannot answer inside its budget twice running is not slow, it
+    is stuck -- and an unattended walk has nobody to notice.
+    """
+    run, outline = _run(tmp_path)
+    tools = FakeTools(run)
+
+    async def ask(move, shot):
+        raise TimeoutError("model turn exceeded its budget")
+
+    progress = _drive(run, outline, ask, tools, max_turns=20)
+
+    assert progress.stopped, "the walk never stopped; it would run to the ceiling"
+    assert progress.timeouts == agent.TIMEOUT_LIMIT, (
+        f"stopped after {progress.timeouts} timeouts, not {agent.TIMEOUT_LIMIT}"
+    )
+    assert progress.turns < 20, "the ceiling stopped it, not the timeout guard"
+
+
+def test_the_timeout_stop_says_how_to_continue(tmp_path):
+    """A stop message that does not say what to do next is a dead end.
+
+    The run is resumable and the budget is a flag; both belong in the sentence
+    that the human actually reads.
+    """
+    run, outline = _run(tmp_path)
+    tools = FakeTools(run)
+
+    async def ask(move, shot):
+        raise TimeoutError("model turn exceeded its budget")
+
+    progress = _drive(run, outline, ask, tools, max_turns=20, turn_timeout=42.0)
+
+    assert "--turn-timeout" in progress.stopped, progress.stopped
+    assert "auto --run" in progress.stopped, progress.stopped
+    assert "42" in progress.stopped, (
+        f"the message does not say what the budget was: {progress.stopped}"
+    )
+
+
+def test_a_turn_that_answers_clears_the_timeout_count(tmp_path):
+    """Consecutive, not cumulative.
+
+    A long walk will collect slow turns spread out over hours. Counting those
+    towards a stop would end a healthy run for being long. Here the pattern is
+    timeout, answer, timeout, answer -- four turns, two of them over budget,
+    never two in a row -- and the walk must reach the end of the section.
+    """
+    run, outline = _run(tmp_path)
+    tools = FakeTools(run)
+    calls = {"n": 0}
+
+    async def ask(move, shot):
+        calls["n"] += 1
+        if calls["n"] % 2 == 1:
+            raise TimeoutError("model turn exceeded its budget")
+        if calls["n"] < 4:
+            # Work, but not the finishing kind -- so the loop asks again and
+            # the second slow turn is actually reached.
+            run.step("s01", action="do", note="part-way through")
+            return
+        run.step("s01", verdict="PASS", action="do",
+                 instruction_ref="#1-open-the-portal", note="did it")
+
+    progress = _drive(run, outline, ask, tools, max_turns=20)
+
+    assert progress.timeouts >= 2, (
+        f"the second slow turn was not reached: {progress.timeouts}"
+    )
+    assert TIMED_OUT not in progress.stopped, progress.stopped
+    assert Run.open(run.dir).segments()[0].status == "done"
+
+
+def test_a_walk_with_no_timeouts_does_not_mention_them(tmp_path):
+    """Reporting "0 timed-out turn(s)" on a clean run trains people to skip the
+    line that matters on a bad one."""
+    clean = agent.Progress(turns=3)
+    assert "timed-out" not in clean.summary()
+    assert "timed-out" in agent.Progress(turns=3, timeouts=1).summary()
+
+
+# --- the lab closed mid-walk ------------------------------------------------
+#
+# The loop already stops when a mechanical move keeps failing, but that takes
+# three more moves and reports it as "the run did not move on" -- which reads as
+# a tool problem. A closed lab is not a stall: the thing under test has gone,
+# and no amount of retrying brings it back.
+
+
+class ClosedLabTools(FakeTools):
+    """Mechanical moves report the way `lab_step` reports when the lab ended.
+
+    It returns the message rather than raising, because that is what the real
+    tools do: `_do_mechanical` hands back what the command *said*, and a
+    non-zero exit is text on stderr, not an exception. A fake that raised would
+    be testing a path the loop never takes.
+    """
+
+    def open_segment(self, segment):
+        return (
+            "!! The lab client says: 'Lab Closed'. Instance d0e61878 "
+            + agent.LAB_CLOSED_MARK
+            + " about the lab. Sections already walked keep their reports."
+        )
+
+
+def test_a_closed_lab_stops_the_walk_at_once(tmp_path):
+    run, outline = _run(tmp_path)
+    tools = ClosedLabTools(run)
+    asked = []
+
+    async def ask(move, shot):
+        asked.append(move.action)
+
+    progress = _drive(run, outline, ask, tools, max_turns=20)
+
+    assert "lab has closed" in progress.stopped.lower(), progress.stopped
+    assert progress.mechanical <= 1, (
+        f"it kept trying: {progress.moves}"
+    )
+    assert not asked, f"a model was asked to think about a lab that is gone: {asked}"
+
+
+def test_the_closed_lab_stop_does_not_claim_the_lab_is_at_fault(tmp_path):
+    """The lab ending is a fact about the session, not a defect in the lab.
+
+    Reported as a failure of the lab it would send a bug to an author whose
+    instructions were never read.
+    """
+    run, outline = _run(tmp_path)
+    progress = _drive(run, outline, _never_asked, ClosedLabTools(run), max_turns=20)
+
+    assert "unknown, not correct" in progress.stopped, progress.stopped
+    assert "auto --run" in progress.stopped, progress.stopped
+
+
+async def _never_asked(move, shot):  # pragma: no cover - asserted not to run
+    raise AssertionError("the model was consulted about a closed lab")

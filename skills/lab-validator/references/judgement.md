@@ -318,6 +318,47 @@ Do not ban the fast door — it is often the better tool. Pair it instead:
 
 ---
 
+## 19. Before believing a measurement, check the thing you measured is still there
+
+Presence is not liveness. A system can keep every property you identify it by
+and still have stopped being the thing you are testing.
+
+A lab that ended kept its browser tab, its tab title, its URL, its instance id
+and all three of its frames. Every check the tool had — several written after
+earlier wrong-target bugs — passed cleanly, because all of them were asking
+*which one is this?* and none was asking *is there one?*
+
+So the walk carried on for four more steps and filed:
+
+- a **major** finding that the instruction pane would not scroll — the pane was
+  dead, not defective;
+- three `PASS` steps for work done against nothing;
+- and, in the same class, a probe that spent its whole budget waiting and then
+  reported `did not complete within 900s` as a defect in the lab.
+
+Each of these is a measurement taken after the subject went away and published
+as a fact about the subject. They are indistinguishable from real findings —
+same schema, same fields, same confident prose — which is precisely what makes
+them worse than recording nothing.
+
+**The rule.** Any check whose failure would invalidate everything after it runs
+*before* anything is recorded, and again during any wait long enough for the
+world to change underneath it. When it fires, refuse: say what was already
+measured, say the rest is **unknown, not correct**, and say what would let the
+run continue.
+
+Three corollaries, each paid for:
+
+- **Read the narrowest surface that can answer.** The liveness check reads the
+  client's own chrome, never the content under test — otherwise the thing being
+  tested can end its own test by mentioning the wrong words.
+- **"I could not read it" is not "it has ended".** They need different fixes.
+  Choosing between them on no evidence manufactures the confident wrong answer
+  the check exists to prevent.
+- **Stop, do not retry.** Retry logic assumes the subject might come back. When
+  it has ended, retrying costs time and writes trace that reads afterwards as
+  though the subject were at fault.
+
 ## Writing a finding somebody will act on
 
 A finding is an argument. It needs:

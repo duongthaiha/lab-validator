@@ -139,7 +139,13 @@ async def _walk(args) -> int:
     from .corpus import extract
     from .discovery import resolve
     from .labclient import LabClient
-    from .launch import await_lab_client, click_launch, ensure_signed_in, signed_out
+    from .launch import (
+        SignInTimeout,
+        await_lab_client,
+        click_launch,
+        ensure_signed_in,
+        signed_out,
+    )
     from .preflight import preflight
     from .runlog import Run
     from .targets import Target
@@ -206,7 +212,16 @@ async def _walk(args) -> int:
             if outcome.needs_human:
                 print(f"\n  LAUNCH NEEDED — {outcome.reason}")
                 print("  Click Launch yourself in the browser window. I will wait.")
-            lab = await await_lab_client(context, budget_s=args.client_budget, known=known)
+            try:
+                lab = await await_lab_client(context, budget_s=args.client_budget, known=known)
+            except SignInTimeout as exc:
+                # Not a crash, and not the user's fault: the lab may simply
+                # still be provisioning. A traceback here reads as "the tool
+                # broke" and buries the one line that says what to do next.
+                print(f"\n  LAB CLIENT NEVER ANSWERED — {exc}", file=sys.stderr)
+                print("  Nothing was walked, so nothing is recorded as checked.",
+                      file=sys.stderr)
+                return 3
             print(f"instance  : {lab.instance_id}")
 
             # 4. Instructions.
@@ -329,10 +344,12 @@ async def _walk(args) -> int:
             else:
                 print(f"review    : {run.dir / scope.REVIEW_FILENAME}")
 
+            hint = f"lab-validator next --run {run.dir}"
             if applied is not None and applied.not_selected_now:
-                print("\nnext: lab-validator run --next   (scoped; the rest stay unknown)")
+                print(f"\nnext: {hint}   (scoped; the rest stay unknown)")
             else:
-                print("\nnext: lab-validator run --next")
+                print(f"\nnext: {hint}")
+            print(f"  or: lab-validator auto --run {run.dir}   (let the agent walk it)")
             return 0
         finally:
             await browser.close()
@@ -651,6 +668,7 @@ def main() -> int:
 
     if args.command == "walk":
         from .browser import DEFAULT_CDP_PORT
+        from .scope import SECTIONS_HELP
 
         w = argparse.ArgumentParser(prog="lab-validator walk")
         w.add_argument("--url", required=True, help="the lab or catalogue URL")
@@ -662,13 +680,14 @@ def main() -> int:
                        help="seconds to wait for Launch to become clickable")
         w.add_argument("--client-budget", type=float, default=300.0,
                        help="seconds to wait for the lab client to answer")
-        w.add_argument("--sections", help="which sections to walk: all | s01,s04 | s04..s06")
+        w.add_argument("--sections", help=SECTIONS_HELP)
         w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
         return cmd_walk(w.parse_args(args.rest))
 
     if args.command == "auto":
         from .agent import DEFAULT_MODEL, DEFAULT_TURN_TIMEOUT
         from .browser import DEFAULT_CDP_PORT
+        from .scope import SECTIONS_HELP
 
         a = argparse.ArgumentParser(prog="lab-validator auto")
         a.add_argument("--url", help="the lab or catalogue URL")
@@ -687,7 +706,7 @@ def main() -> int:
                        help="seconds to wait for Launch to become clickable")
         a.add_argument("--client-budget", type=float, default=300.0,
                        help="seconds to wait for the lab client to answer")
-        a.add_argument("--sections", help="which sections to walk: all | s01,s04 | s04..s06")
+        a.add_argument("--sections", help=SECTIONS_HELP)
         a.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
         parsed = a.parse_args(args.rest)
         if not parsed.run and not parsed.url:
@@ -695,12 +714,13 @@ def main() -> int:
         return cmd_auto(parsed)
 
     if args.command == "scope":
+        from .scope import SECTIONS_HELP
+
         s = argparse.ArgumentParser(prog="lab-validator scope")
         s.add_argument("--run", help="run folder (default: the most recent)")
         s.add_argument("--runs", help="runs root (default: ./runs)")
         s.add_argument("--sections",
-                       help="which sections to walk: all | s01,s04 | s04..s06. "
-                            "Omit to review without changing anything.")
+                       help=f"{SECTIONS_HELP}. Omit to review without changing anything.")
         return cmd_scope(s.parse_args(args.rest))
 
     if args.command == "next":

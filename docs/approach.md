@@ -1275,7 +1275,275 @@ Operating this — the review, the syntax, what to select and what it costs — 
 [the README](../README.md#reviewing-what-you-got-and-choosing-what-to-walk) and
 Step 4 of the skill.
 
+### 2.21 The first live run: a tool that invents defects is worse than one that finds none
+
+Everything above was built and tested without a lab. The first end-to-end run
+against a real one — `walk --url` on a live enrolment, launch, capture, then
+`auto` — found **five defects in the validator in about an hour**, none of which
+624 passing tests could see. Four were ordinary. The fifth is the one this
+section exists for.
+
+**The accessible name is not the visible label.** `find_launch` looked for
+`get_by_role("button", name="Launch")` and matched nothing, on a page with a
+perfectly visible `<input type="button" value="Launch">`. The enrolment page
+gives Launch, Resume *and* Cancel the same `aria-label` — the lab's title — and
+**`aria-label` overrides `value` for the accessible name**, so all three answer
+to "Azure AI: Platform and Services" and none answers to "Launch". The lesson
+generalises past this product: `get_by_role(name=…)` is not a superset of "what
+the learner reads off the screen", so a tool claiming to act as a learner cannot
+select controls by ARIA alone. The fix ORs in a locator that matches on the
+attribute the learner actually sees. (That three controls share one accessible
+name is arguably a real accessibility defect in the product; it is out of scope
+here, which is about lab instructions, but it is worth someone's time.)
+
+**Launch is two-stage, and the page states its own ETA.** Launch opens
+`/Setup/<guid>` — *"your lab will be ready in about 3 minutes and 40 seconds"* —
+which self-advances to `/LabClient/<guid>` carrying the same GUID. No code was
+needed, but it consumed 150 s of a 180 s budget, so the margin was luck. A page
+that publishes its own ETA should be read, not timed out against a constant.
+
+**An expected outcome must not present as a crash.** A model turn hit its
+timeout mid-`PERFORM`, and `TimeoutError` escaped as a traceback whose last
+frame was inside the SDK. The agent was working correctly — driving a portal
+sign-in, 60+ screenshots recorded — and the operator saw "the SDK crashed". A
+long unattended walk *will* have slow turns; that is a budget, not a fault. One
+is now absorbed and named, two in a row stop the run with a resumable message.
+Same shape as `SignInTimeout` before it: **whenever a budget can expire, decide
+what it looks like, or the traceback decides for you.**
+
+#### The one that matters: the tool filed a `major` defect that was not true
+
+The `READ` move reported that the instruction pane would not scroll —
+*"scrollTop stayed at 0; a learner reading this section by hand would be
+stuck"* — as a `major` finding, in fluent, specific, entirely convincing prose.
+It was false. The pane scrolls perfectly: `scrollTop = 800` → 800, a wheel event
+at the pane's centre → 600, PageDown → 1104.
+
+Two independent bugs, and **both biased the same way — towards inventing a
+defect**:
+
+1. the offset was read from `document.scrollingElement`, while the real scroller
+   is a `div` with `overflow-y: auto`, so it was pinned at 0 no matter what
+   happened;
+2. the wheel was aimed by hovering the frame's `body`, whose bounding box on
+   this product is a 101px strip *above* the pane — so the event went to the tab
+   bar.
+
+Neither could fail loudly. Both are the kind of mistake that produces a
+confident, well-worded, wrong answer — and it would have been filed against
+**every section of the lab**, because every section shares the pane.
+
+Three things follow, in increasing order of importance.
+
+**Distrust the first finding from a code path that has never run.**
+`scroll_instructions()` had, by this plan's own account, never executed against a
+lab. Its first live act was to file a major defect. An unproven path producing a
+finding on its first execution is precisely the case where verification is
+cheapest and most valuable: two probes settled it in ten minutes. Principle 6
+already says a defect needs an oracle or a repeated observation; this adds
+*which* observations to doubt first.
+
+**A measurement must name what it measured.** The old check reported a verdict
+and nothing else, so a wrong guess at the scroller was invisible inside a
+confident conclusion. `Scrolled` now carries `where` — the element actually
+measured — into the evidence, and a test asserts the finding names it. The
+general rule: **where a value could have come from the wrong thing, publish
+which thing it came from**, because that is the field a reader can check.
+
+**"Did not move" and "could not move" are different facts.** A section short
+enough to fit its pane has nothing to scroll and has denied the learner nothing;
+a section with 21 000 px below the fold that will not move is a real defect.
+Collapsing them files a major finding against every short section. `Scrolled`
+distinguishes three outcomes and `stuck` requires `scrollable` — and the *call
+site* is guarded too, by an AST test, because the decision to file is taken in
+`lab_step.py` and correct semantics can still be used incorrectly.
+
+Two smaller notes from the same run. `moved` ORs the offset against what the
+learner can see, because either signal alone can lie: one live scroll changed
+the offset while rendering two screenfuls of the same paragraph. And `overflow`
+takes the *larger* of the before/after readings, because a pane can report less
+overflow once lazily-rendered content settles — understating it turns a real
+defect into "nothing to scroll".
+
+#### The harness had the same disease
+
+Chasing all this, the mutation harness appeared to hang: 27 minutes, one process
+at 100% CPU, no output. It was not hung and it was not slow. It began
+
+```python
+ROOT = Path(__file__).resolve()
+while not (ROOT / "pyproject.toml").exists():
+    ROOT = ROOT.parent
+```
+
+and the file lives in a session folder with no repo above it. `Path("C:\\").parent`
+is `C:\`, so the loop spun forever. **A loop that can only terminate by
+succeeding cannot report failure — it can only stop being observed.** It now
+searches a bounded sequence and raises with the path it searched.
+
+Two further traps cost real time and are worth naming. **PowerShell buffers a
+piped pipeline** — including `Tee-Object` — until it exits, so a progressing
+harness and a hung one look identical; the harness now writes its own log file
+and flushes. And when it could not name a failing test it printed
+`"(collection or import error)"`, which sent an hour into debugging imports that
+were fine: the real cause was that *nothing failed*. **Do not print a cause you
+did not observe** — that is the same defect as the false scroll finding, in the
+tool that was built to catch it.
+
+#### What the guards look like now
+
+All twenty mutations — each reintroducing a bug that actually shipped and
+produced a wrong answer — are caught, and each is caught by a test written for
+that behaviour rather than by an unrelated one. Six of the twenty were **missed
+on the first pass**, which is the useful part of the exercise:
+
+| Missed | Why the guard could not see it |
+| --- | --- |
+| three timeout mutations | no test ever raised `TimeoutError` from `ask`, so `except _NeverRaised:` — an undefined name — never evaluated. Unguarded code looks identical to guarded code from the inside. |
+| the `lab_step` call site | `Scrolled`'s semantics were tested; the decision to *file* was not |
+| the visible-label locator | the fake read `value*="…"` out of the whole selector, so mutating one clause still found the other's — a fake that agrees with the bug it exists to catch |
+| the `walk` hint | the scraper required a literal `next: ` prefix, so it read the two `print`s and missed the `hint = …` assignment on the line above — **the exact line that had been wrong** |
+
+The last two share a moral worth stating on its own: **a guard written after the
+fix, and tested only against the fix, will happily agree with the bug.** The way
+to find out is to reintroduce the original defect and watch — and to insist the
+test that fires is the one that claims to cover it.
+
 ---
+
+### 2.22 Presence is not liveness
+
+§2.18 said *position is not identity* — do not take the thing you are about to
+work on from a list by its place in that list. This is the same mistake one
+level deeper, and it cost four fabricated steps in a real run.
+
+The second live `auto` run produced nothing but heartbeats for several minutes.
+A read-only CDP probe screenshotted the lab client and it said:
+
+> **Lab Closed** — Your lab has been closed. [Close Window]
+
+The lab had ended. The agent was still walking it.
+
+#### Everything the tool checked was still true
+
+| Checked | After the lab closed |
+| --- | --- |
+| a lab-client tab exists | ✅ still there |
+| exactly one candidate, refuse otherwise (§2.18) | ✅ still exactly one |
+| the tab title matches the lab name | ✅ unchanged |
+| the URL is `/LabClient/<guid>` | ✅ unchanged |
+| the instance id pinned at launch | ✅ unchanged |
+| the console frame is present | ✅ `/VirtualizationClient/<guid>/` |
+| the instructions frame is present | ✅ `/Instructions/<guid>` |
+
+Only the top-level body text changed. Every guard the project had built —
+several of them written *because* of earlier wrong-target bugs — passed
+cleanly, because they were all asking **which lab is this?** and none of them
+was asking **is there a lab?**
+
+#### What it wrote instead
+
+- **seq 170** — a `LAB003` **major** finding: *"the instruction pane did not
+  scroll … a learner reading this section by hand would be stuck"*. The pane
+  was not stuck. The pane was gone. This is the false-finding failure of §2.21
+  again, from a completely different cause, and it would have been sent to a
+  lab author whose instructions were fine.
+- **seq 171–173** — three `PASS` steps (`page:1`, `wait:5000`, `dialog`)
+  recording success for work done against nothing.
+
+A run that stops early is honest. A run that keeps recording after its subject
+has gone manufactures evidence, and the evidence is indistinguishable from the
+real thing — same schema, same fields, same confident prose.
+
+#### The fix, and the four decisions inside it
+
+`LabClient.ensure_open()` reads the client and raises `LabClosed` if the lab
+has ended. It runs at the top of `lab_step.main_async`, before anything is
+recorded, and the agent loop stops on the first refusal.
+
+1. **Read the main frame only.** The instructions frame carries the lab's own
+   prose, which can say anything at all — including "lab closed" in a sentence
+   about what to do at the end. Reading it would let a lab's own text end its
+   own walk.
+2. **An unreadable page is not a closed page.** `closed_reason` returns `None`
+   on any exception. A dead CDP connection and a finished lab need different
+   fixes, and choosing between them on no evidence produces exactly the
+   confident wrong answer the check exists to prevent.
+3. **Stop, do not stall.** A stall means *this keeps failing*; a closed lab
+   means *the thing under test has gone*. Routing it through the stall detector
+   would cost three more moves and read afterwards as though the lab were at
+   fault.
+4. **Match on the message, not a second channel.** `_do_mechanical` returns
+   what the command *said*, and a parallel exit-code channel could disagree
+   with it. A test couples `agent.LAB_CLOSED_MARK` to the refusal text so the
+   two cannot drift apart silently.
+
+#### The same bug again, one layer down
+
+The step-boundary check catches a lab that was *already* closed. It does
+nothing for one that ends mid-step — and the probes are where that costs most.
+`until:connected` polls for its entire budget, and when the budget runs out it
+files:
+
+> `LAB007 ... did not complete within 900s` — **major**
+
+A major finding about a wait that could never have completed, against a lab
+that had already gone. Exactly the false `LAB003` again, from the opposite
+direction: the first published *"it did not move"* as *"it cannot move"*; this
+one publishes *"it did not finish"* as *"it does not finish"*. Both are
+measurements taken after the subject went away and printed as facts about the
+subject.
+
+Both probes now check once per heartbeat — bounded at fifteen seconds of waste,
+one page read per check — and `run_actions` grows a second `LabClosed` handler
+that records `BLOCKED` and exits 4. A guard asserts *every* probe checks, so
+the next one added has to as well, and a second asserts the check stays in the
+heartbeat branch rather than the tight loop, because a check that reads the
+page every two seconds is a check somebody deletes later.
+
+#### A guard that only runs when things go wrong is a guard nobody runs
+
+`_refuse_if_closed` called `closed_reason` **before it was imported**. All 679
+tests passed. Reaching that line needs a lab that closes mid-step, so the first
+thing this code would ever have done in anger was raise `NameError` — on the
+one path where a clear message matters most, and in a place where the resulting
+traceback would have read as *the tool crashed* rather than *the lab ended*.
+
+The general shape: **error paths are the least-executed code and the most
+load-bearing prose in the system.** The guard now resolves every `Name` load in
+`lab_step.py` against everything bound in it, and fires on the real bug when it
+is put back.
+
+#### Two lessons that generalise past this bug
+
+**A check that is never called is a check that does not exist.** Mutating
+`await lab.ensure_open()` to `pass` left all six new closed-lab tests green:
+they tested the semantics, not the decision to use them. That is the third time
+in this project that a *call site* went unguarded while its *behaviour* was
+thoroughly tested — the first was the scroll finding, the second the launch
+selector. The guard that closes it asserts an ordering property, not a call:
+*nothing writes to the run before the liveness check has passed*, verified over
+the AST, because writing after the work would satisfy "is it called?" while the
+trace already held steps taken against a dead lab.
+
+**Record which claims are guesses.** `CLOSED_MARKERS` began as three wordings,
+two seen and one invented. That is a small violation of this project's own
+central rule, and invisible from the tuple. It is now a mapping from wording to
+provenance, with a test asserting every entry declares itself `observed` or
+`unverified` and that at least one is real — otherwise the whole check could
+decay into a heuristic presented as a fact, which is what it exists to stop.
+The blind spot is stated in the docstring: a lab that ends with words nobody
+has seen will not be caught, and the walk will carry on exactly as it did
+before this check existed.
+
+#### The unanswered question
+
+**Why did the lab close?** Idle timeout is the likely answer, but the earlier
+`auto` run had been clicking around the lab client, and one of the things a lab
+client has is an End Lab control. If the tool closed its own lab, that is an
+eighth defect and a serious one. Nothing in the trace settles it, which is
+itself worth recording: *the run did not capture what it would need to answer
+the first question anybody asks about it.*
 
 ## 3. Recommended architecture
 ### 3.1 The control-surface ladder
