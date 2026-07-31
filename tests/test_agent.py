@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 
@@ -649,3 +650,57 @@ def test_credential_asks_reach_the_prompt_as_labels(tmp_path):
 
     assert "VM/Password" in text
     assert "labels only" in text
+
+
+# --- talking to the CLI ------------------------------------------------------
+
+
+def test_the_cli_bridge_survives_non_ascii_output(monkeypatch):
+    """An em-dash in an instruction must not blank the section.
+
+    `_cli` tells the child to write UTF-8. If the parent then decodes with its
+    locale codec, one character outside cp1252 kills subprocess's reader thread
+    and `stdout` arrives *empty* -- not an error. `Tools.instructions` returns
+    "" and the model judges a section it never saw.
+
+    Found by running the smoke fixture: five tracebacks on stderr, a blank
+    prompt, and a walk that carried on as if nothing had happened.
+    """
+    real = subprocess.run
+
+    def spy(argv, **kw):
+        # Same kwargs `_cli` chose, over output that provokes the bug.
+        return real(
+            [sys.executable, "-c", "print('\u2014 caf\u00e9 \u2192 \u2018quoted\u2019')"],
+            **kw,
+        )
+
+    monkeypatch.setattr(agent.subprocess, "run", spy)
+    proc = agent._cli("text", "--segment", "s01")
+    assert "\u2014" in proc.stdout and "caf\u00e9" in proc.stdout
+
+
+def test_the_cli_bridge_names_its_encoding(monkeypatch):
+    """The paired assertion, because the bug above is locale-dependent.
+
+    On a UTF-8 locale the test above passes with or without the fix, so it
+    would quietly stop guarding anything the moment this ran on Linux. This one
+    is coupled to the implementation on purpose: it is the only way to catch a
+    locale bug from a machine that does not have the locale.
+    """
+    seen = {}
+
+    def spy(argv, **kw):
+        seen.update(kw)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(agent.subprocess, "run", spy)
+    agent._cli("text")
+    assert seen.get("encoding") == "utf-8", "the child is told UTF-8; decode it as UTF-8"
+    assert seen.get("errors"), "a mangled character beats a lost section"
+
+
+def test_a_silent_command_is_reported_as_silent():
+    """"" reads as "nothing happened" and as "nothing to say" alike."""
+    quiet = subprocess.CompletedProcess(["x"], 0, "", "")
+    assert agent._say(quiet).strip() != ""

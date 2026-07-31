@@ -95,10 +95,19 @@ class AgentUnavailable(RuntimeError):
 
 
 def _cli(*args: str, timeout: int = 600) -> subprocess.CompletedProcess:
+    # Decode explicitly. `text=True` alone decodes with the *parent's* locale
+    # codec, while the child is told to write UTF-8 on the next line -- so on
+    # any non-UTF-8 locale (cp1252 is the Windows default) a single em-dash in
+    # an instruction blows up subprocess's reader thread and `stdout` arrives
+    # empty. Empty, not an error: the tool then hands the model a blank section
+    # and lets it judge instructions it never saw. `errors="replace"` because a
+    # mangled character is a far better outcome than a lost section.
     return subprocess.run(  # noqa: S603 - fixed argv, no shell
         [sys.executable, "-m", "lab_validator.cli", *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
         cwd=str(ROOT),
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
@@ -115,7 +124,10 @@ def _say(proc: subprocess.CompletedProcess) -> str:
     err = (proc.stderr or "").strip()
     if proc.returncode != 0:
         return f"command failed (exit {proc.returncode})\n{out}\n{err}".strip()
-    return "\n".join(p for p in (out, err) if p)
+    # Silence and success are different claims, and "" reads as neither. A
+    # command that exited clean having printed nothing is a signal worth
+    # passing on rather than a blank the model will fill in for itself.
+    return "\n".join(p for p in (out, err) if p) or "(the command printed nothing)"
 
 
 @dataclass

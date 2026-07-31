@@ -39,7 +39,16 @@ INVOCATION = re.compile(r"^[ \t]*lab-validator[ \t]+(?P<rest>.+?)[ \t]*$", re.M)
 # not produce a helpful error; it produces a run that dies partway through a lab
 # with somebody waiting on it. So both documents get the same guard.
 README = ROOT / "README.md"
-DOCS = {"SKILL.md": SKILL, "README.md": README}
+# `docs/agent.md` is executed the same way: someone whose unattended walk has
+# just stopped, copying a resume command out of it at speed.
+AGENT_DOC = ROOT / "docs" / "agent.md"
+DOCS = {"SKILL.md": SKILL, "README.md": README, "docs/agent.md": AGENT_DOC}
+
+#: How many invocations each document must yield for the vacuity guard to mean
+#: anything. The regex is shared, so one command-dense document proves it still
+#: matches; a focused document only has to prove it was parsed at all. Set from
+#: what each file is *for*, not from what it happens to contain today.
+MINIMUM = {"SKILL.md": 8, "README.md": 8, "docs/agent.md": 2}
 
 
 def invocations(path: Path = SKILL) -> list[str]:
@@ -83,7 +92,8 @@ def flags_of(command: str) -> set[str]:
 def test_the_docs_contain_commands_at_all(name):
     """A guard on the guard: if the parsing regex ever stops matching, every
     other test here would pass vacuously."""
-    assert len(invocations(DOCS[name])) >= 8, f"{name} yielded almost no commands"
+    found = len(invocations(DOCS[name]))
+    assert found >= MINIMUM[name], f"{name} yielded {found} commands, expected {MINIMUM[name]}"
 
 
 @pytest.mark.parametrize("doc,line", documented())
@@ -225,3 +235,61 @@ def test_every_section_cross_reference_resolves():
     cited = {m.group(1) for m in re.finditer(r"\u00a7\s?(\d+(?:\.\d+[a-z]?)?)", body)}
     missing = sorted(cited - headings)
     assert not missing, f"approach.md cites sections that do not exist: {missing}"
+
+# --- the map -----------------------------------------------------------------
+#
+# The README's Layout block is the only index of what this project contains.
+# Both tests below were written after it had silently fallen five modules
+# behind -- including `agent.py`, the entire autonomous walker. A stale listing
+# renders perfectly; a reader simply concludes the code is not there and either
+# writes it again or gives up. Neither failure leaves a trace.
+
+CODE = {
+    "src/lab_validator": lambda p: p.name != "__init__.py",
+    "scripts": lambda p: True,
+}
+
+
+def layout_cites() -> set[str]:
+    body = README.read_text(encoding="utf-8")
+    return set(re.findall(r"^((?:src/lab_validator|scripts)/\S+\.py)", body, re.M))
+
+
+def code_files() -> set[str]:
+    return {
+        f"{folder}/{p.name}"
+        for folder, keep in CODE.items()
+        for p in (ROOT / folder).glob("*.py")
+        if keep(p)
+    }
+
+
+def test_the_layout_lists_every_module_and_script():
+    missing = sorted(code_files() - layout_cites())
+    assert not missing, f"README's Layout never mentions: {missing}"
+
+
+def test_the_layout_lists_nothing_that_is_gone():
+    """The other direction, which is the one that misleads hardest.
+
+    A listed file that no longer exists sends a reader looking for something
+    that was deleted, and the natural conclusion is that their checkout is
+    broken rather than that the map is.
+    """
+    gone = sorted(layout_cites() - code_files())
+    assert not gone, f"README's Layout lists files that do not exist: {gone}"
+
+def test_every_test_named_in_the_docs_exists():
+    """Citing a test by name is a promise that it is still called that.
+
+    `agent.md` points at the guards that make its claims true -- "the
+    set-equality test will fail otherwise" is only reassuring if that test is
+    still there under that name. A rename leaves the sentence reading perfectly
+    while the guarantee behind it has quietly moved.
+    """
+    suite = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "tests").glob("test_*.py"))
+    defined = set(re.findall(r"^def (test_\w+)", suite, re.M))
+    for name, path in DOCS.items():
+        cited = set(re.findall(r"\b(test_[a-z0-9_]{12,})\b", path.read_text(encoding="utf-8")))
+        unknown = sorted(cited - defined)
+        assert not unknown, f"{name} names tests that do not exist: {unknown}"

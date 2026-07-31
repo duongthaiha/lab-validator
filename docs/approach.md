@@ -1075,11 +1075,42 @@ The second and fourth also share a shape with §2.18 — *selection by position*
 The model picked the first code in a list it could not see the meaning of, for
 the same reason picking the first tab is wrong: position is not identity.
 
+#### A fifth, found by running it a second time
+
+Packaging that smoke run as a repo script meant running it again, and it
+immediately produced a fifth: the bridge to the CLI told the child process to
+write UTF-8 while decoding with the *parent's* locale codec. On cp1252 — the
+Windows default — a single em-dash in an instruction killed `subprocess`'s
+reader thread and `stdout` arrived **empty**.
+
+Empty, not an error. The tool returned `""`, the prompt carried no instruction
+text, and the walk continued with the model judging a section it had never seen.
+The tracebacks went to the parent's stderr, where nothing was reading them.
+
+Two things worth keeping from it. First, **the failure mode of a text pipeline
+is silence, not an exception** — an encoding mismatch that raised would have
+been fixed in minutes. Second, and worse: the run *looked fine*. The model still
+reached a defensible verdict, because the blocker in front of it was total. With
+the bug fixed the same fixture recorded a `LAB002` instruction defect found by
+**reading**, and marked the dependent tasks `DEFERRED` rather than blaming them
+all on the blocker. So the bug had been silently suppressing the cheapest and
+most reliable class of finding this project produces, while every visible signal
+said the run had worked.
+
+A plausible answer from a blind tool is the hardest defect to see, and the only
+reason this one surfaced is that the verification procedure was run twice.
+
 **Lesson for the harness, not just this feature.** Every test here injects a
 fake `ask` and never reaches the SDK, which is precisely why none of them
 noticed that no tool could register. A seam that is always stubbed is a seam
 nobody has tested. The cheap correction was one smoke run against a synthetic
 run folder — no lab, no browser — which found all four in about ten minutes.
+That run is now `scripts/agent_smoke.py`, because a verification procedure that
+lives only in its author's shell history is one nobody else will ever perform.
+
+Operating the thing this section justifies — what each stop message means, which
+controls the model is given and which are withheld, and what is still unproven —
+is [`agent.md`](agent.md).
 
 ---
 

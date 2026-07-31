@@ -21,11 +21,11 @@ a silent model substitution (`G-30`) and a `.env` file that is wrong in two inde
 ways (`G-70`, `G-71`). Findings are in [`docs/gapanalysis.md`](docs/gapanalysis.md);
 engineering lessons are in [`docs/approach.md`](docs/approach.md) §2.8–§2.10.
 
-## Guidance — four documents, four different questions
+## Guidance — five documents, five different questions
 
 The guidance is deliberately split, because "how do I run this" and "is what I
 just saw a defect" are not the same question and get read at different moments.
-Pick by the question, not by reading all four:
+Pick by the question, not by reading all five:
 
 | Question | Read |
 | --- | --- |
@@ -33,6 +33,7 @@ Pick by the question, not by reading all four:
 | What do I do *next*, mid-walk? | don't read — ask: `lab-validator next` |
 | Is this observation a defect? Whose? What evidence do I need? | [`skills/lab-validator/references/judgement.md`](skills/lab-validator/references/judgement.md) |
 | What are the steps of a walk, in order? | [`skills/lab-validator/SKILL.md`](skills/lab-validator/SKILL.md) |
+| The agent stopped — why? What was it allowed to do? How do I change it? | [`docs/agent.md`](docs/agent.md) |
 | Why is the engine built this way, and what went wrong before? | [`docs/approach.md`](docs/approach.md) |
 
 `judgement.md` is the one worth reading even if you never run this tool. Each of
@@ -298,6 +299,11 @@ rather than spend: `--max-turns` (default 200) and `--turn-timeout` (default 900
 since a lab step is not a chat reply). `--run <folder>` drives a run that already
 exists, so an interrupted walk resumes instead of restarting.
 
+**[`docs/agent.md`](docs/agent.md) is the rest of it** — what each stop message
+means and what to do about it, the five controls the model gets and the three
+withheld from it, how to change the agent without making its report unbelievable,
+and how to verify a change with no lab at all.
+
 ### Act through the learner's controls
 
 A capability that *acts* on the lab by a route the learner does not have proves
@@ -458,6 +464,7 @@ ruff check src scripts tests
 
 ```
 docs/approach.md                    architecture, findings and reuse guide
+docs/agent.md                       the autonomous walker: stops, limits, changing it
 docs/gapanalysis.md                 learner-facing gaps found in the target lab
 skills/lab-validator/               the agent skill — judgement, taxonomy, traps
 targets/<slug>.toml                 per-lab descriptor — data only, no code
@@ -470,14 +477,20 @@ scripts/lab_discover.py             list enrolments; scaffold a target descripto
 scripts/browser_session.py          attach to a signed-in browser; recon commands
 scripts/lab_drive.py                drive a running lab: instructions, creds, VM
 scripts/bootstrap_auth.py           fallback: sign-in → encrypted session
+scripts/agent_smoke.py              exercise the agent's SDK wiring with no lab
 
 src/lab_validator/cli.py            `lab-validator` front door; the walk command
+src/lab_validator/walkloop.py       what to do next, and the refusals that matter
+src/lab_validator/agent.py          `auto`: the loop driven by a model, on a leash
 src/lab_validator/runlog.py         run folder, append-only trace, resume, redaction
 src/lab_validator/taxonomy.py       verdict codes and the instruction/setup domain axis
 src/lab_validator/corpus.py         instruction segmenter and structural checks
 src/lab_validator/report.py         trace → per-section reports + roll-up
+src/lab_validator/preflight.py      check the environment before walking it
 src/lab_validator/launch.py         sign-in gate, Launch automation, lab-client wait
 src/lab_validator/vault.py          run-scoped credential vault, captured once at start
+src/lab_validator/asks.py           which instruction is asking for which credential
+src/lab_validator/learnerpath.py    which learner controls a run never exercised
 src/lab_validator/targets.py        target descriptor loader and validator
 src/lab_validator/discovery.py      enrolment parsing, URL→lab resolution, scaffolding
 src/lab_validator/imaging.py        screenshot capture, downscaled view copies
