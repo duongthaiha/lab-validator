@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from lab_validator import browser as browser_mod  # noqa: E402
-from lab_validator import cli, corpus, launch  # noqa: E402
+from lab_validator import cli, corpus, launch, taxonomy  # noqa: E402
 from lab_validator.labclient import Credential  # noqa: E402
 
 ENROLMENT = 5928204
@@ -314,3 +314,80 @@ def test_the_instruction_corpus_is_written_where_the_run_points(wired, tmp_path)
     assert md.exists()
     manifest = json.loads((latest_run(tmp_path) / "run.json").read_text(encoding="utf-8"))
     assert Path(manifest["corpus"]["path"]).name == "outline.md"
+
+
+# --- segment 0: the setup preflight ----------------------------------------
+
+
+def test_the_walk_checks_the_setup_before_it_walks_it(wired, tmp_path, capsys):
+    """Segment 0 exists, and its report is written where the run points."""
+    assert cli.cmd_walk(walk_args()) == 0
+    report = latest_run(tmp_path) / "preflight.md"
+    assert report.exists()
+    body = report.read_text(encoding="utf-8")
+    assert "Setup preflight" in body
+    assert "preflight :" in capsys.readouterr().out
+
+
+def test_a_lab_issued_operation_url_is_caught_before_section_one(wired, tmp_path, capsys):
+    """The G-71 class: valid, resolvable, and wrong in a way that fails elsewhere."""
+    wired["lab"]._creds.append(Credential(
+        scope="Azure", label="Endpoint",
+        value="https://ai-foundry-000000.openai.azure.com/openai/deployments/d/chat/completions",
+    ))
+    assert cli.cmd_walk(walk_args()) == 0, "a setup defect must not fail the run"
+    out = capsys.readouterr().out
+    assert "SETUP DEFECT" in out
+    assert "attributable" in out
+
+    manifest = json.loads((latest_run(tmp_path) / "run.json").read_text(encoding="utf-8"))
+    (failure,) = manifest["preflight"]["failures"]
+    assert failure["domain"] == "setup"
+    assert failure["severity"] == "critical"
+    assert failure["verdict"] in taxonomy.FINDING_VERDICTS
+
+
+def test_a_clean_preflight_still_publishes_what_it_could_not_check(wired, tmp_path):
+    """Absence of evidence is the thing this project keeps refusing to call a pass."""
+    assert cli.cmd_walk(walk_args()) == 0
+    run_dir = latest_run(tmp_path)
+    manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert not manifest["preflight"]["failures"]
+    assert manifest["preflight"]["unchecked"], "a clean pass must still state its limits"
+    assert "did *not* check" in (run_dir / "preflight.md").read_text(encoding="utf-8")
+
+
+def test_the_preflight_report_never_contains_a_captured_secret(wired, tmp_path):
+    """It renders credential-derived evidence, so it goes through the redactor.
+
+    And — the half this test was originally missing — the *argument* has to
+    survive that. An assertion that only checks a bad thing is absent will pass
+    on an empty file; it passed here while the published evidence read
+    ``[REDACTED:Endpoint]``, which leaks nothing and proves nothing.
+    """
+    wired["lab"]._creds.append(Credential(
+        scope="Azure", label="Endpoint",
+        value="https://ai-foundry-000000.openai.azure.com/openai/deployments/d/chat",
+    ))
+    assert cli.cmd_walk(walk_args()) == 0
+    body = (latest_run(tmp_path) / "preflight.md").read_text(encoding="utf-8")
+
+    assert "Sup3rSecret!value" not in body
+    assert "8d1f4a2e-0b73-4c19-9f6a-2ab5cd7e1234" not in body
+    assert "ai-foundry-000000" not in body
+
+    assert "/openai/deployments/d/chat" in body, "masking took the finding with it"
+    assert "REDACTED" not in body
+
+
+def test_no_vault_means_the_preflight_reports_a_blind_spot_not_a_pass(
+    wired, monkeypatch, tmp_path
+):
+    """Losing the Resources tab costs coverage, and the report has to say so."""
+    async def no_creds():
+        raise RuntimeError("Resources tab not reachable")
+
+    monkeypatch.setattr(wired["lab"], "credentials", no_creds)
+    assert cli.cmd_walk(walk_args()) == 0
+    body = (latest_run(tmp_path) / "preflight.md").read_text(encoding="utf-8")
+    assert "no credentials were captured" in body

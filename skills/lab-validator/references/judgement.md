@@ -191,6 +191,30 @@ Residual risk to state plainly rather than paper over: **screenshots are pixels
 and redactors are text-only.** Evidence images will contain live secrets. Keep
 them out of version control.
 
+### 14a. If masking your evidence destroys your finding, you cited the wrong thing
+
+The corollary, and it is not obvious until it bites. Once every issued value is
+registered with the redactor, any finding that quotes one publishes as:
+
+> this endpoint is an operation URL where a base URL is required —
+> evidence: `[REDACTED:Endpoint]`
+
+The redactor did its job perfectly and the finding is still worthless: nobody
+can verify or act on it without going back to the live environment, which is
+usually gone by the time anyone reads the report.
+
+Cite **structure, not the value**:
+
+| Claim | Bad evidence | Evidence that survives masking |
+| --- | --- | --- |
+| Wrong *kind* of URL | the URL | `https://<host>/openai/deployments/…/chat/completions` — the path *is* the argument; the host never was |
+| Two values disagree | both values | `differ in host` — names the component, prints neither |
+| A secret is malformed | the secret | `<17 chars, letters+digits+punctuation>` |
+| A placeholder survived | — | the placeholder verbatim: it is drawn from a known list, so it cannot be a secret, and the shape alone loses which one |
+
+The test for this is mechanical and worth writing: **run your published evidence
+through the redactor and assert the argument is still in it.**
+
 ## 15. Version drift is a finding, not just metadata
 
 A new content version or edition code is the strongest available prior that the
@@ -200,6 +224,39 @@ instructions moved. Record it every run.
 
 Including "the target has disappeared". Bookkeeping that depends on observing
 the thing being observed fails exactly when you need it most.
+
+## 17. Check the environment before walking it, and report the check's own coverage
+
+Setup defects do not announce themselves. The environment looks fine, the
+procedure appears to work, and then it fails obliquely several steps later — in
+a handful of unrelated-looking places at once, each of which reads as its own
+bug. Found incidentally, they get misattributed and the run's other conclusions
+get poisoned along with them.
+
+So make the environment check a **deliberate first pass**, before step 1. It
+does not prevent those defects; it makes every later failure *attributable*.
+Cheap things worth checking before doing any work:
+
+- values the environment hands you are the *kind* of value they need to be —
+  a base endpoint where an SDK will append its own path, a GUID where a GUID is
+  required, a real value rather than an unreplaced placeholder;
+- the environment's *own* shipped config agrees with what it just issued you;
+- files that load that config agree on where it is — **disagreement alone is the
+  finding**, and it needs no live resolution at all;
+- anything named is what it is called (principle 11).
+
+Two rules make this pass honest.
+
+**It never stops the run.** A blocked target is the most valuable thing a walk
+can find, and finding it early must not cost you everything after it.
+
+**A clean preflight is not a pass.** It means *the things you knew to check*
+passed. Publish the list of questions it could not ask, uncollapsed and last, or
+an absent finding will be read as an assurance — the exact misreading the whole
+discipline exists to prevent. The most damaging defect in the reference run was
+only catchable because somebody thought to ask what a deployment actually
+served; the value of that question is not evidence that no unasked question
+matters.
 
 ---
 

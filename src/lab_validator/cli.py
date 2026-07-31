@@ -81,6 +81,7 @@ async def _walk(args) -> int:
     from .corpus import extract
     from .discovery import resolve
     from .launch import await_lab_client, click_launch, ensure_signed_in, signed_out
+    from .preflight import preflight
     from .runlog import Run
     from .targets import Target
     from .vault import Vault
@@ -171,6 +172,7 @@ async def _walk(args) -> int:
             run._save()
 
             # 5. Credentials: captured once, masked at the writer, kept as data.
+            vault = None
             try:
                 vault = Vault.capture(await lab.credentials(), run.redactor)
                 vault.save(run.dir)
@@ -179,6 +181,38 @@ async def _walk(args) -> int:
             except Exception as exc:  # noqa: BLE001 - a missing tab must not end the run
                 run.log(f"credential capture skipped: {type(exc).__name__}: {exc}")
                 print(f"vault     : none — {type(exc).__name__}; reuse falls back to the tab")
+
+            # 6. Segment 0: check the environment before walking it.
+            #
+            # The most damaging defects in the reference run were setup defects
+            # found late, after their failures had already been misattributed to
+            # unrelated causes across several sections. Running this first does
+            # not prevent them; it makes every later failure attributable.
+            #
+            # It never stops the run. A blocked lab is the most valuable thing a
+            # walk can find, and finding it early must not cost the rest.
+            checks = preflight(endpoints=vault.endpoints() if vault else None)
+            (run.dir / "preflight.md").write_text(
+                run.redactor.scrub(checks.to_markdown()), encoding="utf-8"
+            )
+            run.manifest["preflight"] = {
+                "checks": len(checks.checks),
+                "failures": [
+                    {"name": c.name, "verdict": c.verdict, "domain": c.domain,
+                     "severity": c.severity, "detail": c.detail}
+                    for c in checks.failures
+                ],
+                "unchecked": checks.unchecked,
+            }
+            run._save()
+            if checks.failures:
+                print(f"preflight : {len(checks.failures)} SETUP DEFECT(S) before section 1")
+                for check in checks.failures:
+                    print(f"            - {check.name}: {check.detail.splitlines()[0]}")
+                print("            the walk continues; later failures are now attributable")
+            else:
+                print(f"preflight : {len(checks.checks)} check(s), clean "
+                      f"({len(checks.unchecked)} thing(s) it could not check)")
 
             print(f"run       : {run.dir}")
             print(f"lab clock : {run.manifest['labMinutesAtStart']} min")

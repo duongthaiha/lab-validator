@@ -674,6 +674,82 @@ any "walk a documented procedure and report where it diverges" problem. The
 platform-specific facts live in their own reference and can be swapped without touching
 the reasoning.
 
+### 2.14 Evidence that dies under masking was never evidence
+
+Once every lab-issued value is registered with the redactor — which §2.9 argues is the
+*right* thing, because a redactor can only mask what it knows — a finding that quotes one
+publishes like this:
+
+> **endpoint Azure/Endpoint** — is an operation URL where a base URL is required.
+> evidence: `[REDACTED:Endpoint]`
+
+The redactor behaved perfectly. The finding is worthless. Nobody reading the report can
+verify it or act on it, and by the time they read it the 96-hour instance is gone.
+
+This was found by asking why a *passing* test passed. `test_the_preflight_report_never_
+contains_a_captured_secret` asserted the secret was absent; the secret was absent; the
+argument was absent too, and no assertion covered that. **A test that only checks a bad
+thing is missing can pass on an empty file.**
+
+The fix is to cite **structure, not the value**:
+
+| Claim | What we cited before | What survives masking |
+| --- | --- | --- |
+| Wrong *kind* of URL | the URL | `https://<host>/openai/deployments/…/chat/completions` — the path *is* the argument, the host never was |
+| Two values disagree | both values | `differ in host` — names the component, prints neither |
+| A malformed secret | the secret | `<17 chars, letters+digits+punctuation>` |
+| An unreplaced placeholder | — | the placeholder **verbatim**: it comes from a known list so it cannot be a secret, and shape alone loses *which* one |
+
+The mismatch row is the interesting one, because it is the mirror image: shape-preserving
+evidence renders both sides of a host mismatch as `https://<host>/`, so *shape* destroys
+that finding exactly as thoroughly as redaction destroyed the other. There is no single
+safe rendering — the right evidence depends on what the claim is. Hence `shape_of()` and
+`differs_in()` as two separate tools.
+
+Nor can we simply print the host: only the *issued* value is registered, so a host
+fragment slips past a whole-value redactor. Naming the component leaks nothing and is
+still actionable — the owner knows where to look.
+
+The general rule, now principle 14a: **if masking your evidence destroys your finding, you
+cited the wrong thing.** The test is mechanical and cheap — run the published evidence
+through the redactor and assert the argument is still in it.
+
+### 2.15 Check the environment before walking it — and publish what the check could not see
+
+G-30, G-70 and G-71 are the three most damaging findings in the workshop, and all three
+were found **late and by accident**, after sections had already been walked and their
+failures misattributed. They share a shape: the environment looks fine, the lab appears to
+work, and then it fails obliquely in five different places, each of which reads as an
+unrelated bug.
+
+`src/lab_validator/preflight.py` makes that a deliberate first pass — segment 0, before
+section 1. It does not prevent those defects. It makes every later failure *attributable*,
+which is the part that was actually missing.
+
+What it can check without a live call is more than expected, and it is all pure:
+
+- **endpoint kind** — base vs operation. Both parse, both resolve, both look right in a
+  config file, and one of them 404s every SDK call from five labs away. This is G-71.
+- **shipped config vs issued values** — the only way to catch a `.env` still pointing at a
+  previous edition's resource.
+- **loader disagreement** — three notebooks loading `.env` from three different relative
+  paths cannot all be right, and *the disagreement alone is the finding*. No lab session
+  needed at all. This is G-70, and it is the cheapest finding in the whole system.
+
+Two rules keep it honest, both carried straight from §2.11 and principle 2:
+
+**It never stops the run.** A blocked lab is the most valuable thing a walk can find, and
+finding it in segment 0 must not cost the other 22 sections.
+
+**A clean preflight is not a pass**, and the report must be structurally incapable of
+implying otherwise. `Preflight.unchecked` is populated by *omission* — passing no config
+records "shipped config — none was read", it does not silently skip — and `to_markdown()`
+prints that list last and never collapsed, while passes are collapsed behind a
+`<details>`. The inversion is deliberate: the reassuring part is the part you have to open
+deliberately. G-30 was only ever catchable because somebody thought to ask what a
+deployment actually served, and the value of that question is not evidence that no unasked
+question matters.
+
 ---
 
 ## 3. Recommended architecture

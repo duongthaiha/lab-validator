@@ -130,3 +130,22 @@ def test_the_installed_copy_has_not_drifted_from_the_repo():
         assert (
             live.read_text(encoding="utf-8") == (SKILL.parent / rel).read_text(encoding="utf-8")
         ), f"{rel} differs between the repo and ~/.copilot/skills; the repo is the source of truth"
+
+
+def test_the_steps_are_numbered_sequentially_from_one():
+    """An agent executes these in order, so a duplicate or gap misroutes a walk.
+
+    Written after inserting a step renumbered the one below it into a collision:
+    two "Step 5" headings, no error, and nothing to notice it.
+    """
+    body = SKILL.read_text(encoding="utf-8")
+    numbers = [int(n) for n in re.findall(r"^## Step (\d+) . ", body, re.M)]
+    assert numbers, "the skill must have numbered steps at all"
+    assert numbers == list(range(1, len(numbers) + 1)), numbers
+
+
+def test_every_referenced_step_number_exists():
+    body = SKILL.read_text(encoding="utf-8")
+    numbers = {int(n) for n in re.findall(r"^## Step (\d+) . ", body, re.M)}
+    for cited in re.findall(r"\(see Step (\d+)\)", body):
+        assert int(cited) in numbers, f"Step {cited} is cited but does not exist"

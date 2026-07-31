@@ -70,7 +70,20 @@ Two behaviours to expect and not "fix":
 
 If the lab is already open in the browser, use `lab-validator run --start` instead.
 
-## Step 3 — Read what the lab actually asks for, before doing anything
+## Step 3 — Read the setup preflight before you trust anything
+
+`walk` runs an environment check as segment 0 and writes `<run>/preflight.md`.
+Read it. It is checking the class of defect that otherwise gets found late and
+misattributed: endpoints of the wrong *kind*, unreplaced placeholders, a shipped
+config that disagrees with what the Resources tab just issued.
+
+- **Failures do not stop the run** — they make every later failure attributable.
+  Record them as findings with `domain=setup`, then carry on.
+- **A clean preflight is not a pass.** Its last section lists what it could not
+  check — model identity, promised resources, VM baseline. Those remain open
+  questions and belong in the coverage table, not in silence.
+
+## Step 4 — Read what the lab actually asks for, before doing anything
 
 ```powershell
 lab-validator run --next                      # the next unwalked section
@@ -82,7 +95,7 @@ Read the whole section first. Do **not** work from the task list alone —
 prerequisites, warnings and "if you see X, do Y" notes live in the prose, and
 missing one produces a false finding.
 
-## Step 4 — Do the work, in the learner's path
+## Step 5 — Do the work, in the learner's path
 
 ```powershell
 lab-validator step --segment s04 --label deploy-gpt4o `
@@ -102,7 +115,7 @@ that rejects paste: none of those are visible to a validator that shortcuts.
 button proves nothing. Press the button and read the artifact it was supposed to
 produce. The most dangerous lab defects are steps that *succeed while failing*.
 
-## Step 5 — Record a verdict for each instruction
+## Step 6 — Record a verdict for each instruction
 
 ```powershell
 lab-validator step --segment s04 --label task2-deploy --verdict LAB001 `
@@ -126,7 +139,7 @@ Record `PASS` for things you verified correct, with the same rigour. **A report
 with no positive evidence cannot distinguish "verified correct" from "never
 reached"**, and a reader will assume the flattering one.
 
-## Step 6 — Finish the section and move on
+## Step 7 — Finish the section and move on
 
 ```powershell
 lab-validator run --finish done        # or: blocked / partial
@@ -138,7 +151,7 @@ Section reports are written **as the walk happens**, not at the end. A
 multi-hour unattended walk *will* be interrupted, and a run that dies with all
 its findings unwritten has produced nothing.
 
-## Step 7 — Report
+## Step 8 — Report
 
 ```powershell
 lab-validator run --report
