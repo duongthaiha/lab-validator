@@ -184,7 +184,7 @@ def test_a_mechanical_move_that_does_not_take_stops_the_walk(tmp_path):
     """
     run, outline = _run(tmp_path)
     tools = FakeTools(run)
-    tools.refresh_report = lambda: "report written"  # says so; does not
+    tools.refresh_report = lambda: "the report could not be written: disk full"
 
     async def ask(move, shot):
         run.step("s01", verdict="PASS", action="do",
@@ -192,12 +192,13 @@ def test_a_mechanical_move_that_does_not_take_stops_the_walk(tmp_path):
 
     progress = _drive(run, outline, ask, tools)
 
-    # Derived three times, executed twice: the third is refused rather than run,
-    # because the state that produced it has not changed and will not.
     assert progress.moves.count("report:s01") == agent.STALL_LIMIT
     assert progress.mechanical == 4  # open, read, report, report
     assert "came back 3 times" in progress.stopped
-    assert "lab-validator next" in progress.stopped  # tells a human what to run
+    # The diagnosis it already has, rather than "run it by hand to see why".
+    # The first real walk stopped here on a dead browser port and said nothing
+    # about it, while the answer had just been printed three times.
+    assert "disk full" in progress.stopped
 
 
 def test_the_ceiling_stops_a_walk_that_will_not_finish(tmp_path):
@@ -386,6 +387,102 @@ def test_the_sdk_is_never_imported_at_module_load():
         if line.startswith(("import ", "from ")) and "copilot" in line
     ]
     assert top == [], f"copilot imported at module level: {top}"
+
+
+def test_build_tools_registers_all_five_controls():
+    """Calling it is the test, because registration is where it broke.
+
+    Found by running `auto` for the first time, not by any test here: this
+    module uses `from __future__ import annotations`, so every hint is a string,
+    and `define_tool` resolves them with `get_type_hints` against the *module's*
+    globals. The parameter models were declared inside `build_tools`, invisible
+    from there, so all five tools died with `NameError: name 'SegmentP' is not
+    defined` -- the entire SDK integration could never have worked, and nothing
+    said so until a session tried to start.
+
+    Everything else in this file injects a fake `ask` and never reaches the SDK,
+    which is exactly why none of it noticed.
+    """
+    try:
+        built = agent.build_tools(agent.Tools(Path(".")))
+    except agent.AgentUnavailable:
+        pytest.skip("SDK not installed; nothing to register against")
+    assert len(built) == len(agent.ALLOWED_TOOLS)
+
+
+def test_the_param_models_are_importable_from_the_module():
+    """The specific thing that was broken, stated plainly."""
+    for model in ("SegmentP", "ActP", "RecordP"):
+        assert hasattr(agent, model), (
+            f"{model} is not at module scope; get_type_hints will not find it"
+        )
+
+
+def test_the_verdict_codes_are_named_where_the_model_chooses(tmp_path):
+    """Observed, not theorised: the first real run misfiled a finding.
+
+    It recorded "the lab environment is unreachable" as `LAB001 Retired or
+    renamed model` -- the first code in the list -- because the tool description
+    said only "a LAB0NN code". A model given no definitions picks the first
+    plausible one, and the finding then goes to the wrong owner.
+    """
+    from lab_validator.taxonomy import FINDING_VERDICTS, name_of
+
+    described = agent.RecordP.model_fields["verdict"].description
+    for code in FINDING_VERDICTS:
+        assert code in described, f"{code} is not offered to the model"
+        assert name_of(code) in described, f"{code} is offered with no definition"
+
+
+def test_the_verdict_menu_is_generated_not_transcribed():
+    """A hand-copied list is a second source of truth waiting to disagree.
+
+    `report.CODE_NAMES` already did exactly that: it stopped at LAB008 while
+    `runlog` accepted LAB009, and 40 findings rendered with no name. So this
+    asserts the menu *is* the taxonomy -- add a code there and it appears here
+    with no edit, which a transcribed list cannot manage.
+    """
+    from lab_validator.taxonomy import FINDING_VERDICTS, name_of
+
+    expected = "; ".join(
+        f"{code} = {name_of(code)}" for code in sorted(FINDING_VERDICTS)
+    )
+    assert agent._verdict_menu() == expected
+    assert expected in agent.RecordP.model_fields["verdict"].description
+
+
+def test_a_retired_model_name_is_explained_not_dumped(tmp_path):
+    """The SDK reports this as a generic JSON-RPC error 40 lines deep.
+
+    Hit on the first real `auto` run: the default was a pinned model name that
+    had retired, and the output was a stack trace ending in
+    `JsonRpcError -32603`. The fix is one flag; nothing in that trace says so.
+    """
+    said = agent._why_no_session(
+        RuntimeError('Request session.create failed with message: '
+                     'Model "claude-sonnet-4.5" is not available.'),
+        "claude-sonnet-4.5",
+    )
+    assert "not available" in said
+    assert "--model auto" in said  # the fix, not just the fault
+
+
+def test_an_unauthenticated_cli_is_named_as_such():
+    said = agent._why_no_session(RuntimeError("401 unauthorized: bad token"), "auto")
+    assert "not authenticated" in said
+    assert "/login" in said
+
+
+def test_an_unrecognised_failure_keeps_its_own_words():
+    """Do not guess a cause. A confident wrong diagnosis costs more than none."""
+    said = agent._why_no_session(RuntimeError("disk on fire"), "auto")
+    assert "disk on fire" in said
+    assert "lab-validator next" in said  # still names the way forward
+
+
+def test_the_default_model_is_not_a_pinned_name():
+    """A validator that reports stale dependencies must not pin one itself."""
+    assert agent.DEFAULT_MODEL == "auto"
 
 
 def _capture(driven):

@@ -996,6 +996,93 @@ wrong thing, because every downstream artefact then corroborates the mistake.
 
 ---
 
+### 2.19 Give a model judgement, never sequencing
+
+The obvious way to automate the walk is to give a model every tool and say
+"walk this lab". It is the wrong shape, and the reason is specific rather than
+philosophical: `next_move`'s refusals were each **paid for by a wrong report**.
+It will not advance past a task nobody judged (§2.17), will not trust a section
+report older than its last step, will not call a section read without a
+recorded learner scroll (§2.16). Hand sequencing to a model and every one of
+those becomes a *suggestion* it may silently decline, at 3am, with nobody
+watching — and the run still produces a confident report.
+
+So the split is:
+
+```
+open / read / report / advance   →  executed directly; no model is consulted
+perform / assess                 →  one scoped model turn, then ask the loop again
+```
+
+**A mechanical move cannot be skipped because nothing is asked about it.** That
+is the whole guarantee, and it costs nothing.
+
+#### Never believe a claim of progress — measure it
+
+A model will report success whether or not it achieved anything, and the
+transcript reads identically both ways. So the loop fingerprints the **run
+folder** before and after every turn — steps recorded, tasks still unjudged,
+section status. An identical fingerprint means nothing happened, whatever was
+said. Three in a row stops the walk, naming the outstanding task.
+
+This is §2.18's rule pointed at a new target: *do not accept an assertion when
+you can check the thing itself.*
+
+#### The loop must apply that scepticism to itself
+
+Writing the test found that it did not. A `refresh_report` that returned happily
+without writing made the loop reissue REPORT **195 times**, hit the move
+ceiling, and blame the budget — while the failure it was papering over is
+exactly the one the REPORT move exists to catch.
+
+The fix generalises: `next_move` derives each mechanical move *from state*, so a
+move that worked changes the state that produced it and the next move differs.
+An identical move coming straight back means the command did not take. One retry
+absorbs a transient browser failure; three is a stuck run.
+
+And when it stops, it must print **the output it already has**. The first real
+run stopped on a repeated READ and said "run it by hand to see why" — while
+`Nothing is listening on http://127.0.0.1:9222` had just been printed three
+times. A stop message that withholds a diagnosis it is holding is worse than
+terse; it sends someone to reproduce a failure that was already explained.
+
+#### Deny the shell, for correctness rather than safety
+
+An agent with a terminal will repair a broken deployment and then report the lab
+as working, while the learner following the written instructions still cannot
+finish it. That is §2.16 with a sharper edge: the fastest route to a *wrong*
+answer is always a shell, and a confidently wrong report is worse than no report
+because every artefact downstream corroborates it.
+
+#### Four defects, none of which any unit test could see
+
+All four surfaced within minutes of *running* the thing, and three were
+invisible to a test suite that passed:
+
+| Defect | Why nothing caught it |
+| --- | --- |
+| `NameError: SegmentP` — every tool failed to register | `from __future__ import annotations` makes hints strings; `define_tool` resolves them with `get_type_hints` against **module** globals, and the models were declared inside the function. **The entire SDK integration could never have worked.** Nothing evaluates the annotation until a session starts. |
+| Default model `claude-sonnet-4.5` did not exist | A pinned model name retires. A validator whose own dependency has gone stale, while it reports on other people's stale dependencies, is the joke this project exists to avoid. Default is now `auto`. |
+| A JSON-RPC traceback for "bad model name" | Both real failures here — retired model, unauthenticated CLI — have one-line fixes, and both looked like an SDK crash. |
+| The model filed "environment unreachable" as `LAB001 Retired or renamed model` | The tool description said only *"a LAB0NN code"*. **Given no definitions a model picks the first plausible option.** With the codes named — generated from `taxonomy.py`, never transcribed — it correctly recorded `BLOCKED` instead. |
+
+The last one is the most generalisable: **a tool description is read at the
+moment of choosing, and competes with nothing.** A rule written only in the
+prompt or the skill competes with everything else in the context. Put the
+constraint where the decision happens.
+
+The second and fourth also share a shape with §2.18 — *selection by position*.
+The model picked the first code in a list it could not see the meaning of, for
+the same reason picking the first tab is wrong: position is not identity.
+
+**Lesson for the harness, not just this feature.** Every test here injects a
+fake `ask` and never reaches the SDK, which is precisely why none of them
+noticed that no tool could register. A seam that is always stubbed is a seam
+nobody has tested. The cheap correction was one smoke run against a synthetic
+run folder — no lab, no browser — which found all four in about ten minutes.
+
+---
+
 ## 3. Recommended architecture
 ### 3.1 The control-surface ladder
 

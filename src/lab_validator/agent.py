@@ -39,6 +39,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydantic import BaseModel, Field
+
 from .corpus import Outline
 from .runlog import Redactor, Run
 from .vault import Vault
@@ -66,7 +68,11 @@ ALLOWED_TOOLS = (
     "lab_look",
 )
 
-DEFAULT_MODEL = "claude-sonnet-4.5"
+# Let the CLI choose. Naming a model here would pin the walk to something that
+# retires -- and a validator whose own dependency has silently gone stale, while
+# it reports on other people's stale dependencies, is the joke this project
+# exists to avoid. `--model` overrides when a specific one is wanted.
+DEFAULT_MODEL = "auto"
 DEFAULT_TURN_TIMEOUT = 900.0
 #: Consecutive turns that change nothing in the run folder before we stop. One
 #: is noise -- a model can spend a turn reading. Three in a row is a loop that
@@ -395,6 +401,7 @@ async def drive(
     progress = Progress()
     last_mechanical = ""
     repeats = 0
+    last_output = ""
 
     # Which credentials the lab issued, by label. `next_move` needs these to
     # spot an instruction that is *asking* for one ("sign in with the username
@@ -434,14 +441,13 @@ async def drive(
             if repeats >= STALL_LIMIT - 1:
                 progress.stopped = (
                     f"{move.action} {move.segment_id} came back {repeats + 1} times "
-                    f"and the run did not move on. The command is failing silently -- "
-                    f"run it by hand to see why:\n"
-                    f"    lab-validator next --run {run.dir}\n"
+                    "and the run did not move on. What the command said last time:\n"
+                    f"    {(last_output or '(no output)').strip()}\n"
                     "Sections already walked keep their reports; the rest are "
                     "unknown, not correct."
                 )
                 return progress
-            _do_mechanical(move, tools, say)
+            last_output = _do_mechanical(move, tools, say)
             progress.mechanical += 1
             continue
 
@@ -473,24 +479,29 @@ async def drive(
     return progress
 
 
-def _do_mechanical(move: Move, tools: Tools, say: Callable[[str], None]) -> None:
-    """Execute a move nobody needs to think about.
+def _do_mechanical(move: Move, tools: Tools, say: Callable[[str], None]) -> str:
+    """Execute a move nobody needs to think about, and return what it said.
 
-    ``report`` is a deliberate no-op: every ``step`` rewrites the section report
-    on its way out, so the file is already current, and the move exists to catch
-    the case where that write failed. Running a step for its side effect would
-    make the loop's own freshness check vacuous.
+    The output is returned rather than only printed because when one of these
+    starts failing it is the single most useful sentence in the run -- the first
+    real walk stopped on a repeated READ, and "nothing is listening on port
+    9222" was the whole diagnosis. A stop message that has to say "run it by
+    hand to see why" is withholding an answer it already has.
     """
     segment = move.segment_id
     if move.action == "open":
-        say(f"    {tools.open_segment(segment)}")
+        out = tools.open_segment(segment)
     elif move.action == "read":
-        say(f"    {tools.act(segment, ['read'], label='read')}")
+        out = tools.act(segment, ["read"], label="read")
     elif move.action == "report":
-        say(f"    {tools.refresh_report()}")
+        out = tools.refresh_report()
     elif move.action == "advance":
         status = "blocked" if move.detail.get("blocked") else "done"
-        say(f"    {tools.close_segment(segment, status)}")
+        out = tools.close_segment(segment, status)
+    else:
+        return ""
+    say(f"    {out}")
+    return out
 
 
 # --- wiring the real SDK ----------------------------------------------------
@@ -511,6 +522,73 @@ def _require_sdk():
     return CopilotClient, define_tool
 
 
+def _verdict_menu() -> str:
+    """The finding codes, named, generated from the taxonomy.
+
+    Written into the tool description rather than left to the skill because the
+    description is what the model reads *at the moment it chooses*. The first
+    real run recorded "the lab environment is unreachable" as `LAB001 Retired or
+    renamed model` -- the first code in the list -- because the description said
+    only "a LAB0NN code" and never said what any of them meant. Given no
+    information a model picks the first plausible option, and a
+    misfiled finding goes to the wrong owner, who correctly rejects it.
+
+    Generated, so it cannot drift from `taxonomy.py` the way `report.CODE_NAMES`
+    once did -- that drift is what left 40 findings rendering as ``LAB009 --
+    `LAB009` `` with no name at all.
+    """
+    from .taxonomy import FINDING_VERDICTS, name_of  # noqa: PLC0415
+
+    return "; ".join(f"{code} = {name_of(code)}" for code in sorted(FINDING_VERDICTS))
+
+
+_VERDICT_MENU = _verdict_menu()
+
+
+class SegmentP(BaseModel):
+    segment: str = Field(description="section id, e.g. s01")
+
+
+class ActP(BaseModel):
+    segment: str = Field(description="section id this step belongs to")
+    actions: list[str] = Field(
+        description=(
+            "lab actions in order: click:X,Y  dblclick:X,Y  move:X,Y  focus  "
+            "type:TEXT  cred:SCOPE/LABEL  key:Control+s  wait:MS  until:connected  "
+            "shot  dialog  read  page:N"
+        )
+    )
+    label: str = Field(default="", description="filename label for captures")
+
+
+class RecordP(BaseModel):
+    segment: str = Field(description="section id")
+    ref: str = Field(
+        description=(
+            "the TASK anchor this verdict answers, e.g. 3-deploy-the-model. "
+            "A section anchor is rejected -- it would vouch for every task "
+            "beneath it."
+        )
+    )
+    verdict: str = Field(
+        description=(
+            "PASS, BLOCKED, DEFERRED, or one of the finding codes below. "
+            "Choose by definition, not by position: " + _VERDICT_MENU
+        )
+    )
+    note: str = Field(description="what was observed, in a learner's words")
+    severity: str = Field(
+        default="", description="critical, major, minor or info -- findings only"
+    )
+    domain: str = Field(
+        default="",
+        description=(
+            "instruction (the text is wrong) or setup (the environment is). "
+            "Leave empty unless the evidence settles it."
+        ),
+    )
+
+
 def build_tools(tools: Tools):
     """Expose the five learner controls to the model.
 
@@ -518,47 +596,16 @@ def build_tools(tools: Tools):
     them at the moment it is choosing what to do. "ref must be a task anchor"
     written here prevents the mistake; written only in the prompt it competes
     with everything else in the context.
+
+    The parameter models live at module scope for a reason that is invisible
+    until you run this: ``from __future__ import annotations`` turns every hint
+    into a string, and ``define_tool`` resolves those with ``get_type_hints``,
+    which looks in the *module's* globals. Declared inside this function they
+    are unreachable there, and every tool fails to register with a bare
+    ``NameError``. Nothing catches it earlier -- the annotation is never
+    evaluated until the SDK asks.
     """
     _, define_tool = _require_sdk()
-    from pydantic import BaseModel, Field  # noqa: PLC0415
-
-    class SegmentP(BaseModel):
-        segment: str = Field(description="section id, e.g. s01")
-
-    class ActP(BaseModel):
-        segment: str = Field(description="section id this step belongs to")
-        actions: list[str] = Field(
-            description=(
-                "lab actions in order: click:X,Y  dblclick:X,Y  move:X,Y  focus  "
-                "type:TEXT  cred:SCOPE/LABEL  key:Control+s  wait:MS  until:connected  "
-                "shot  dialog  read  page:N"
-            )
-        )
-        label: str = Field(default="", description="filename label for captures")
-
-    class RecordP(BaseModel):
-        segment: str = Field(description="section id")
-        ref: str = Field(
-            description=(
-                "the TASK anchor this verdict answers, e.g. 3-deploy-the-model. "
-                "A section anchor is rejected -- it would vouch for every task "
-                "beneath it."
-            )
-        )
-        verdict: str = Field(
-            description="PASS, BLOCKED, DEFERRED, or a LAB0NN code for a defect"
-        )
-        note: str = Field(description="what was observed, in a learner's words")
-        severity: str = Field(
-            default="", description="critical, major, minor or info -- findings only"
-        )
-        domain: str = Field(
-            default="",
-            description=(
-                "instruction (the text is wrong) or setup (the environment is). "
-                "Leave empty unless the evidence settles it."
-            ),
-        )
 
     @define_tool(description="Read the instruction text a learner sees for a section.")
     async def lab_instructions(params: SegmentP, invocation=None) -> str:
@@ -591,6 +638,36 @@ def build_tools(tools: Tools):
     return [lab_instructions, lab_tasks, lab_act, lab_record, lab_look]
 
 
+def _why_no_session(exc: Exception, model: str) -> str:
+    """Turn an SDK failure into the sentence that fixes it.
+
+    Matched on the message rather than an exception type because the SDK
+    delivers all of these as one generic JSON-RPC error; there is nothing else
+    to match on. An unrecognised failure keeps its original text -- guessing a
+    cause would be worse than admitting we do not know it.
+    """
+    said = str(exc)
+    if "is not available" in said or "model" in said.lower() and "not" in said.lower():
+        return (
+            f"the model {model!r} is not available to your Copilot CLI.\n"
+            "  copilot --help          # lists what this CLI accepts\n"
+            "  lab-validator auto --model auto ...\n"
+            "'auto' lets Copilot choose, and is the default for exactly this "
+            "reason: a pinned model name eventually retires."
+        )
+    if "auth" in said.lower() or "token" in said.lower() or "401" in said:
+        return (
+            "the Copilot CLI is not authenticated, so no session could start.\n"
+            "  copilot         # then /login\n"
+            f"Original error: {said}"
+        )
+    return (
+        f"could not start a Copilot session: {said}\n"
+        "Nothing else is blocked -- `lab-validator next` walks the same loop "
+        "without a model."
+    )
+
+
 async def run_agent(
     run: Run,
     *,
@@ -614,26 +691,33 @@ async def run_agent(
     client = CopilotClient(log_level="error")
     await client.start()
     try:
-        session = await client.create_session(
-            model=model,
-            session_id=f"labwalk-{run.dir.name}",
-            tools=build_tools(tools),
-            hooks=build_hooks(redactor),
-            skill_directories=[str(ROOT / "skills" / "lab-validator")],
-            infinite_sessions={"enabled": True},
-            working_directory=str(ROOT),
-            on_permission_request=lambda request: {"approved": True},
-            system_message={
-                "content": (
-                    "You are validating a hands-on lab by doing it as a learner "
-                    "would. Your job is to find where the written instructions no "
-                    "longer match reality. You are not here to make the lab "
-                    "succeed: a step you cannot complete the documented way is a "
-                    "finding, and working around it destroys the evidence. Follow "
-                    "the lab-validator skill's judgement rules."
-                )
-            },
-        )
+        try:
+            session = await client.create_session(
+                model=model,
+                session_id=f"labwalk-{run.dir.name}",
+                tools=build_tools(tools),
+                hooks=build_hooks(redactor),
+                skill_directories=[str(ROOT / "skills" / "lab-validator")],
+                infinite_sessions={"enabled": True},
+                working_directory=str(ROOT),
+                on_permission_request=lambda request: {"approved": True},
+                system_message={
+                    "content": (
+                        "You are validating a hands-on lab by doing it as a learner "
+                        "would. Your job is to find where the written instructions no "
+                        "longer match reality. You are not here to make the lab "
+                        "succeed: a step you cannot complete the documented way is a "
+                        "finding, and working around it destroys the evidence. Follow "
+                        "the lab-validator skill's judgement rules."
+                    )
+                },
+            )
+        except Exception as exc:
+            # A JSON-RPC traceback is not an answer. The two things that
+            # actually go wrong here -- a model name that has retired, and a CLI
+            # that is not signed in -- both have a one-line fix, and both look
+            # like an SDK crash if the error is allowed through raw.
+            raise AgentUnavailable(_why_no_session(exc, model)) from exc
 
         async def ask(move: Move, shot: Path | None) -> None:
             attachments = (
