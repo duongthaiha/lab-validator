@@ -176,3 +176,52 @@ def test_every_referenced_step_number_exists():
     numbers = {int(n) for n in re.findall(r"^## Step (\d+) . ", body, re.M)}
     for cited in re.findall(r"\(see Step (\d+)\)", body):
         assert int(cited) in numbers, f"Step {cited} is cited but does not exist"
+
+# --- Structure, not just commands -------------------------------------------
+#
+# A guidance document has a second way to mislead, and it is quieter than a
+# renamed flag: its own structure can drift out of reach of the tools used to
+# navigate it. Both tests below were written after that happened. Two whole
+# sections of `approach.md` -- and one top-level heading -- had been written
+# indented by two spaces. Markdown still renders an indented ATX heading, so
+# nothing looked wrong and nothing failed. But every `^###` search missed them,
+# so the document's own author could not see the sections existed and wrote a
+# cross-reference to the wrong one.
+
+GUIDANCE = ROOT / "docs" / "approach.md"
+
+
+@pytest.mark.parametrize("name", sorted(DOCS) + ["docs/approach.md"])
+def test_no_heading_is_hidden_from_a_plain_search(name):
+    """Headings start at column 0, so `^#` finds every one of them.
+
+    Indented headings render fine and are therefore invisible until someone
+    greps for a section, gets nothing, and concludes it does not exist.
+    """
+    path = DOCS.get(name) or GUIDANCE
+    hidden = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if re.match(r"[ \t]+#{1,6} \S", line) and not line.lstrip().startswith("#!")
+    ]
+    assert not hidden, f"{name}: indented headings are invisible to a plain search: {hidden}"
+
+
+def test_every_section_cross_reference_resolves():
+    """A cited section number must be a section that exists.
+
+    Scoped to `approach.md` deliberately. `gapanalysis.md` also writes things
+    like "Required Lab Setup S5", but there the section belongs to the *lab
+    under test*, not to the document -- a different namespace that happens to
+    share a sigil, and checking it against local headings would be nonsense.
+
+    Honest limit: this catches a reference to a section that is not there. It
+    cannot catch a reference that resolves to the *wrong* section, which is the
+    mistake that prompted it. Only reading catches that one.
+    """
+    body = GUIDANCE.read_text(encoding="utf-8")
+    headings = set(re.findall(r"^#{1,6} (\d+(?:\.\d+[a-z]?)?)[ .]", body, re.M))
+    assert headings, "approach.md must have numbered sections at all"
+    cited = {m.group(1) for m in re.finditer(r"\u00a7\s?(\d+(?:\.\d+[a-z]?)?)", body)}
+    missing = sorted(cited - headings)
+    assert not missing, f"approach.md cites sections that do not exist: {missing}"

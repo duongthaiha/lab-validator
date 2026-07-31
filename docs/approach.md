@@ -674,6 +674,43 @@ any "walk a documented procedure and report where it diverges" problem. The
 platform-specific facts live in their own reference and can be swapped without touching
 the reasoning.
 
+**The exemption this argument quietly granted was wrong.** The guard was applied to the
+skill because an agent runs it; the README was left alone because a human reads it. But a
+human reading `lab-validator run --next` types it, and the failure is the same — a command
+that no longer exists, discovered mid-lab. The only difference is the feedback loop, and
+the slower loop is the *worse* one: the skill was corrected within minutes of the flag
+being removed, while the README kept recommending it across several commits and was the
+last place in the repo still doing so. **A guide only a human follows is still executed;
+it just fails further from the change that broke it.** So `tests/test_skill.py` now scrapes
+both, and the parametrisation names the document, so a failure says which one lied.
+
+Writing that guard immediately found two bugs in the scraper it had been getting away with
+against a single, tidier file: a trailing aligned `# comment` was parsed as the command
+name, and `\s+` between the binary and its sub-command spans newlines, so a bare
+`lab-validator` on its own line silently swallowed the line below it. Both had been latent
+since the guard was written. **A test that has only ever seen one input is a test with one
+observation behind it** — principle 6 applied to the tools that produce findings, not just
+to the findings. Both matchers are now constrained to same-line whitespace, and the
+comment strip requires two spaces so a real argument containing `#` (`--ref #anchor`) is
+not truncated into a different, still-plausible command — which is §2.18's rule again, in
+a regex: silently producing a wrong-but-valid answer is worse than failing.
+
+**A document can also drift out of reach of the tools used to read it.** Two whole
+sections — §2.17 and §2.18 — and the `## 3.` heading had been written indented by two
+spaces. Markdown renders an indented ATX heading normally, so nothing looked wrong and
+nothing failed; but every `^###` search missed them, and the document's own author, unable
+to see that §2.17 and §2.18 existed, wrote a cross-reference to the wrong section. **The
+failure is not that the structure was ugly. It is that the structure lied to the only tool
+anyone uses to navigate a 1,500-line document,** and the lie was silent, so it propagated
+into prose that looked authoritative. Two guards now: no heading may be indented, and
+every `§N.M` citation must resolve to a section that exists. The second found a real
+dangling reference on its first run.
+
+Both are honest about their limits. The citation check catches a reference to a section
+that is *not there*; it cannot catch one that resolves to the *wrong* section, which is
+exactly the mistake that prompted it. Only reading catches that. Claiming otherwise would
+make the guard worse than useless — it would license skipping the read.
+
 ### 2.14 Evidence that dies under masking was never evidence
 
 Once every lab-issued value is registered with the redactor — which §2.9 argues is the
@@ -796,170 +833,170 @@ Two consequences worth stating, because they are where the value actually lands:
   attempt at the pairing, where I had claimed clicking the Instructions *tab* covered the
   *pager*. It does not. Switching to a pane is not reading it.
 
-  ### 2.17 The unit of coverage is the task, not the section
+### 2.17 The unit of coverage is the task, not the section
 
-  The walk loop packages the one part of a hand-driven walk that is genuinely
-  mechanical: deciding what comes next and refusing to advance past work nobody
-  did. Everything else — what the instruction means, whether the screen matches
-  it, which side is at fault — needs judgement and stays with the agent.
+The walk loop packages the one part of a hand-driven walk that is genuinely
+mechanical: deciding what comes next and refusing to advance past work nobody
+did. Everything else — what the instruction means, whether the screen matches
+it, which side is at fault — needs judgement and stays with the agent.
 
-  Two design choices carry the whole module.
+Two design choices carry the whole module.
 
-  **It is a pure function of the run folder.** `next_move(run, outline)` reads
-  persisted state and nothing else, so resuming a killed walk is the same call as
-  continuing a live one. That is not tidiness; a multi-hour unattended walk *will*
-  be interrupted, and a loop whose position lives in a Python variable cannot
-  survive it. The side benefit is that the whole state machine is testable without
-  a browser, including a drive-to-exhaustion test that proves it cannot spin — a
-  loop that returns the same move forever would hang an unattended run with no
-  error and no output, which is the least debuggable failure there is.
+**It is a pure function of the run folder.** `next_move(run, outline)` reads
+persisted state and nothing else, so resuming a killed walk is the same call as
+continuing a live one. That is not tidiness; a multi-hour unattended walk *will*
+be interrupted, and a loop whose position lives in a Python variable cannot
+survive it. The side benefit is that the whole state machine is testable without
+a browser, including a drive-to-exhaustion test that proves it cannot spin — a
+loop that returns the same move forever would hang an unattended run with no
+error and no output, which is the least debuggable failure there is.
 
-  **Progress is counted in tasks, not sections.** A section is a heading; a task
-  is a thing the instructions told a learner to do. The failure mode of the
-  reference walk was a task quietly skipped inside a section that then reported
-  clean, and only task-level bookkeeping can see that. So a step must name the
-  task it answers, and a section reference is explicitly *not* accepted as
-  coverage — one would vouch for every task under it, restoring the exact hole.
+**Progress is counted in tasks, not sections.** A section is a heading; a task
+is a thing the instructions told a learner to do. The failure mode of the
+reference walk was a task quietly skipped inside a section that then reported
+clean, and only task-level bookkeeping can see that. So a step must name the
+task it answers, and a section reference is explicitly *not* accepted as
+coverage — one would vouch for every task under it, restoring the exact hole.
 
-  Pointing the finished loop at the reference run is what made this concrete. All
-  23 sections read `done`; 8 of them contain 35 numbered tasks that **no step ever
-  named**. That is not an accusation that the tasks were skipped — 6 328 steps and
-  81 findings say otherwise — it is the sharper and more useful claim that *the
-  evidence cannot show they were judged*. A run that says "complete" while 35
-  tasks are unaccounted for is exactly the report that should not read clean, and
-  the loop now appends that count to its final sentence.
+Pointing the finished loop at the reference run is what made this concrete. All
+23 sections read `done`; 8 of them contain 35 numbered tasks that **no step ever
+named**. That is not an accusation that the tasks were skipped — 6 328 steps and
+81 findings say otherwise — it is the sharper and more useful claim that *the
+evidence cannot show they were judged*. A run that says "complete" while 35
+tasks are unaccounted for is exactly the report that should not read clean, and
+the loop now appends that count to its final sentence.
 
-  Three smaller decisions, each of which exists because the naive version is
-  silently wrong:
+Three smaller decisions, each of which exists because the naive version is
+silently wrong:
 
-  - **"No tasks" and "could not find the tasks" are different answers.** Both
-    yield an empty list, and collapsing them reproduces the bug the corpus parser
-    already warns about: an unresolvable anchor "looks like *nothing to check*
-    instead of *could not resolve*". `coverage_kind()` returns `enumerated`,
-    `no-tasks` or `unresolved`, and the unresolved case shouts.
-  - **Blocked keeps reading.** A blocker is the *first* finding in a section, not
-    the last, so the loop switches from `perform` to `assess` — judge what the
-    text alone can settle — rather than ending the section on it. §2.11, enforced
-    rather than remembered.
-  - **The clock outranks work that is ready to do.** Stopping mid-section leaves
-    it unreported, so the loop stops with `RESERVE_MINUTES` still on the lab
-    clock. Stopping early with a complete deliverable beats stopping late with a
-    folder somebody has to reconstruct by hand.
+- **"No tasks" and "could not find the tasks" are different answers.** Both
+  yield an empty list, and collapsing them reproduces the bug the corpus parser
+  already warns about: an unresolvable anchor "looks like *nothing to check*
+  instead of *could not resolve*". `coverage_kind()` returns `enumerated`,
+  `no-tasks` or `unresolved`, and the unresolved case shouts.
+- **Blocked keeps reading.** A blocker is the *first* finding in a section, not
+  the last, so the loop switches from `perform` to `assess` — judge what the
+  text alone can settle — rather than ending the section on it. §2.11, enforced
+  rather than remembered.
+- **The clock outranks work that is ready to do.** Stopping mid-section leaves
+  it unreported, so the loop stops with `RESERVE_MINUTES` still on the lab
+  clock. Stopping early with a complete deliverable beats stopping late with a
+  folder somebody has to reconstruct by hand.
 
-  Finally, the livelock. Under a task-level rule, a caller that keeps passing
-  section anchors gets asked for the same tasks forever, with no error. Real risk:
-  the reference run recorded 394 references and *every one* named a section. The
-  loop cannot relax the rule, so instead it detects the mis-scoping and names the
-  fix in the same sentence it asks the question.
+Finally, the livelock. Under a task-level rule, a caller that keeps passing
+section anchors gets asked for the same tasks forever, with no error. Real risk:
+the reference run recorded 394 references and *every one* named a section. The
+loop cannot relax the rule, so instead it detects the mis-scoping and names the
+fix in the same sentence it asks the question.
 
-  **The loop is also where credential-awareness lands.** Operating by hand, a
-  human reads *"sign in with the username from the Resources tab"*, goes and
-  fetches it, and thinks nothing of it. An autonomous walk has to be told, and the
-  move that asks for a task is the only place that can tell it. So each requested
-  task carries the lab-issued values its text is asking for, resolved against the
-  vault:
+**The loop is also where credential-awareness lands.** Operating by hand, a
+human reads *"sign in with the username from the Resources tab"*, goes and
+fetches it, and thinks nothing of it. An autonomous walk has to be told, and the
+move that asks for a task is the only place that can tell it. So each requested
+task carries the lab-issued values its text is asking for, resolved against the
+vault:
 
-  ```
-  task: #1-sign-in       [username -> VM/Username; password -> VM/Password]
-  task: #2-set-endpoint  [api key -> NOT ISSUED by this lab]
-  ```
+```
+task: #1-sign-in       [username -> VM/Username; password -> VM/Password]
+task: #2-set-endpoint  [api key -> NOT ISSUED by this lab]
+```
 
-  Two properties make that safe and useful rather than merely convenient. First,
-  **only labels cross the boundary** — resolution runs over `Vault.label_index()`,
-  so deciding which credential an instruction wants never requires holding one,
-  and a move can be printed to a console or written into a manifest without
-  thought. That claim is now tested against a vault holding a real value; the
-  earlier version of the test passed a hand-written label map, which proved
-  nothing because the secret never entered the system at all. Second, **an
-  unsatisfiable ask is a finding, not an error**: the instruction wants something
-  this lab never issued, which is a `LAB002 / domain=setup` defect and a learner's
-  dead end. A loop that quietly skipped it would hide precisely the class of
-  defect the walk exists to find.
+Two properties make that safe and useful rather than merely convenient. First,
+**only labels cross the boundary** — resolution runs over `Vault.label_index()`,
+so deciding which credential an instruction wants never requires holding one,
+and a move can be printed to a console or written into a manifest without
+thought. That claim is now tested against a vault holding a real value; the
+earlier version of the test passed a hand-written label map, which proved
+nothing because the secret never entered the system at all. Second, **an
+unsatisfiable ask is a finding, not an error**: the instruction wants something
+this lab never issued, which is a `LAB002 / domain=setup` defect and a learner's
+dead end. A loop that quietly skipped it would hide precisely the class of
+defect the walk exists to find.
 
-  **A run folder that depends on a file somewhere else is not evidence.** The
-  walk wrote its parsed outline only to `artifacts/instructions/`, which is shared
-  and which the *next* walk overwrites. Nothing failed — that is the problem.
-  Asking an older run what to do next would have enumerated a different lab's
-  tasks and answered with total confidence, and a wrong answer nobody can see is
-  wrong is how a validator stops being worth running. Two changes: the walk saves
-  a copy of the outline **into the run**, and the shared-path fallback is taken
-  only when the manifest's recorded hash still matches the file. On a mismatch it
-  refuses and says why. Refusing is strictly better than guessing here, because
-  the guess is indistinguishable from a real answer.
+**A run folder that depends on a file somewhere else is not evidence.** The
+walk wrote its parsed outline only to `artifacts/instructions/`, which is shared
+and which the *next* walk overwrites. Nothing failed — that is the problem.
+Asking an older run what to do next would have enumerated a different lab's
+tasks and answered with total confidence, and a wrong answer nobody can see is
+wrong is how a validator stops being worth running. Two changes: the walk saves
+a copy of the outline **into the run**, and the shared-path fallback is taken
+only when the manifest's recorded hash still matches the file. On a mismatch it
+refuses and says why. Refusing is strictly better than guessing here, because
+the guess is indistinguishable from a real answer.
 
-  ### 2.18 Which lab is this? — position is not identity
+### 2.18 Which lab is this? — position is not identity
 
-  The same shape turned up twice more, in the two places that pick *the thing to
-  work on*, and both picked `[0]`:
+The same shape turned up twice more, in the two places that pick *the thing to
+work on*, and both picked `[0]`:
 
-  - `LabClient.find()` took the first browser tab whose URL contains
-    `/LabClient/`.
-  - `await_lab_client()` did the same while waiting after Launch.
+- `LabClient.find()` took the first browser tab whose URL contains
+  `/LabClient/`.
+- `await_lab_client()` did the same while waiting after Launch.
 
-  Neither could fail loudly. A stale tab answers `minutes_remaining()` cheerfully,
-  serves instructions, and screenshots a VM — so the walk would run to completion
-  and file a gap analysis about **a different lab**, with evidence, timestamps and
-  screenshots that all corroborate each other. And this is not a remote
-  possibility: the surrounding advice *deliberately* leaves the old tab open
-  (*"the lab tab was left open on purpose, so re-running will pick it up"*), and
-  the standing rule against restarting the browser means tabs accumulate across a
-  session. The design made the collision likely and then resolved it by position.
+Neither could fail loudly. A stale tab answers `minutes_remaining()` cheerfully,
+serves instructions, and screenshots a VM — so the walk would run to completion
+and file a gap analysis about **a different lab**, with evidence, timestamps and
+screenshots that all corroborate each other. And this is not a remote
+possibility: the surrounding advice *deliberately* leaves the old tab open
+(*"the lab tab was left open on purpose, so re-running will pick it up"*), and
+the standing rule against restarting the browser means tabs accumulate across a
+session. The design made the collision likely and then resolved it by position.
 
-  The fix is the same principle the walk already applies to the product under
-  test — principle 13, *match on identity, not on a name you derived* — turned
-  back on the validator itself. Three cases now get three answers, because they
-  need three different actions:
+The fix is the same principle the walk already applies to the product under
+test — principle 13, *match on identity, not on a name you derived* — turned
+back on the validator itself. Three cases now get three answers, because they
+need three different actions:
 
-  | Tabs | Answer |
-  |---|---|
-  | none | *launch the lab first* — unchanged |
-  | one | use it |
-  | several | **refuse**, and name the instance ids |
+| Tabs | Answer |
+|---|---|
+| none | *launch the lab first* — unchanged |
+| one | use it |
+| several | **refuse**, and name the instance ids |
 
-  Refusing is the interesting one. It is tempting to resolve ambiguity with a
-  heuristic — newest tab, longest-lived, most recently focused — and every such
-  rule is right most of the time, which is precisely what makes it dangerous: the
-  rare wrong answer is indistinguishable from a right one and there is no
-  downstream check that could catch it. Two disambiguators that *are* evidence
-  rather than heuristics: the caller records which lab tabs existed **before**
-  clicking Launch, so the new tab is identifiable by construction; and an explicit
-  instance id pins it exactly. Where neither applies, a human is asked. That costs
-  one interruption in a case that should be rare, and it is the only version of
-  this that cannot silently validate the wrong lab.
+Refusing is the interesting one. It is tempting to resolve ambiguity with a
+heuristic — newest tab, longest-lived, most recently focused — and every such
+rule is right most of the time, which is precisely what makes it dangerous: the
+rare wrong answer is indistinguishable from a right one and there is no
+downstream check that could catch it. Two disambiguators that *are* evidence
+rather than heuristics: the caller records which lab tabs existed **before**
+clicking Launch, so the new tab is identifiable by construction; and an explicit
+instance id pins it exactly. Where neither applies, a human is asked. That costs
+one interruption in a case that should be rare, and it is the only version of
+this that cannot silently validate the wrong lab.
 
-  A detail worth keeping: the ambiguity is reported through the *wait*, not
-  swallowed by it. Polling can never resolve two open tabs, so `await_lab_client`
-  remembers the refusal and raises it instead of the generic "never answered"
-  timeout. A timeout message that describes the wrong problem sends the reader to
-  look at provisioning for fifteen minutes.
+A detail worth keeping: the ambiguity is reported through the *wait*, not
+swallowed by it. Polling can never resolve two open tabs, so `await_lab_client`
+remembers the refusal and raises it instead of the generic "never answered"
+timeout. A timeout message that describes the wrong problem sends the reader to
+look at provisioning for fifteen minutes.
 
-  A third instance of the same shape turned up in the walk loop itself, found by
-  driving the finished CLI rather than by reading it: `_report_written` asked
-  whether `sections/<id>.md` **exists**. Existence is not currency. A report
-  written before the last three findings passes that test, so a section could
-  advance carrying a report that reads clean while the trace beside it holds a
-  defect nobody rendered — and because the run then looks complete, nothing later
-  ever re-reads it. The fix is the same move as the corpus hash: record *how far
-  through the trace the report was written from* (`reported_through`), and treat
-  a report older than the section's last step as absent. Findings recorded after
-  a report reopen it.
+A third instance of the same shape turned up in the walk loop itself, found by
+driving the finished CLI rather than by reading it: `_report_written` asked
+whether `sections/<id>.md` **exists**. Existence is not currency. A report
+written before the last three findings passes that test, so a section could
+advance carrying a report that reads clean while the trace beside it holds a
+defect nobody rendered — and because the run then looks complete, nothing later
+ever re-reads it. The fix is the same move as the corpus hash: record *how far
+through the trace the report was written from* (`reported_through`), and treat
+a report older than the section's last step as absent. Findings recorded after
+a report reopen it.
 
-  The compatibility clause matters as much as the check. A run folder with no
-  `reported_through` is trusted rather than forced to re-report, because run
-  folders are evidence and outlive the code that wrote them: demanding a rewrite
-  of a sealed run to satisfy a newer bookkeeping field would corrupt the thing
-  the field exists to protect.
+The compatibility clause matters as much as the check. A run folder with no
+`reported_through` is trusted rather than forced to re-report, because run
+folders are evidence and outlive the code that wrote them: demanding a rewrite
+of a sealed run to satisfy a newer bookkeeping field would corrupt the thing
+the field exists to protect.
 
-  **Three of these in one hardening pass is a pattern, not three coincidences.**
-  Every one was a *selection by position or presence* rather than by identity —
-  first tab, shared file, file exists — and not one could fail loudly. That is
-  the family resemblance worth remembering: the dangerous bugs in a validator are
-  not the ones that crash, they are the ones that answer confidently about the
-  wrong thing, because every downstream artefact then corroborates the mistake.
+**Three of these in one hardening pass is a pattern, not three coincidences.**
+Every one was a *selection by position or presence* rather than by identity —
+first tab, shared file, file exists — and not one could fail loudly. That is
+the family resemblance worth remembering: the dangerous bugs in a validator are
+not the ones that crash, they are the ones that answer confidently about the
+wrong thing, because every downstream artefact then corroborates the mistake.
 
-  ---
+---
 
-  ## 3. Recommended architecture
+## 3. Recommended architecture
 ### 3.1 The control-surface ladder
 
 Always take the highest rung that can answer the question. Every rung down costs an order of
@@ -1413,7 +1450,7 @@ labelled untested hypotheses in the gap analysis and should not stay that way.
 
 **Resolved by validation run 001 (2026-07-29):**
 
-- ~~Jumpbox or side-by-side?~~ → **Jumpbox** (§2.4b).
+- ~~Jumpbox or side-by-side?~~ → **Jumpbox** (§2.4, point (b)).
 - ~~Is `window.api.v1` exposed?~~ → **Yes**, in the child frames, all 22 methods (§2.6).
 - ~~Can instruction text be obtained without an API key?~~ → **Yes**, `/Instructions/{guid}`
   is directly readable (§2.6). This substantially reduces the value of chasing an API key.
