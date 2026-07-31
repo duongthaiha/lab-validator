@@ -1514,6 +1514,43 @@ load-bearing prose in the system.** The guard now resolves every `Name` load in
 `lab_step.py` against everything bound in it, and fires on the real bug when it
 is put back.
 
+#### The refusal crashed, and only driving it found that
+
+`severity="blocker"` sat in the closed-lab handler through a full test suite, a
+32-mutation sweep and a commit. It is not a severity. The taxonomy has four —
+`critical`, `major`, `minor`, `info` — and `BLOCKED` has **none**, because
+blocked is a *status*, not a finding (§2.11).
+
+Running one step against the still-closed lab produced:
+
+```
+ValueError: unknown severity 'blocker'; expected one of
+('critical', 'major', 'minor', 'info')
+```
+
+So the detection worked perfectly and then **published itself as a tool crash**
+— which is defect 3 of this same live run, arriving for the third time from a
+third direction. Every guard written for this feature passed, because they all
+asked *does the handler record BLOCKED and exit 4?* and none asked *can this
+call succeed at all?*
+
+Fixed by dropping the field, and guarded structurally: every `severity=` and
+`verdict=` string literal anywhere in `src/` or `scripts/` is now resolved
+against `runlog.SEVERITIES` / `runlog.VERDICTS`, and any call recording
+`BLOCKED` with a severity fails outright. The class is closed, not the instance.
+
+After the fix, the same command against the same closed lab:
+
+```
+!! The lab client says: 'Lab Closed'. Instance d0e61878-... has ended, so
+   nothing observed from here is evidence about the lab. Sections already
+   walked keep their reports; the rest are unknown, not correct.
+exit=4
+```
+
+That is the only part of this work verified against a live lab, and it is worth
+saying which part: the *detection* is proven, the *recovery* is not.
+
 #### Two lessons that generalise past this bug
 
 **A check that is never called is a check that does not exist.** Mutating

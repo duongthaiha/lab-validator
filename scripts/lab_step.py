@@ -376,7 +376,7 @@ async def main_async(args) -> int:
                     except KeyError:
                         pass
                     run.step(
-                        segment, verdict="BLOCKED", severity="blocker",
+                        segment, verdict="BLOCKED",
                         domain="setup", action="lab-closed", surface="dom",
                         note=str(exc),
                     )
@@ -412,7 +412,7 @@ async def main_async(args) -> int:
                 # that could never have completed.
                 print(f"\n!! {exc}", file=sys.stderr)
                 run.step(
-                    args.segment, verdict="BLOCKED", severity="blocker",
+                    args.segment, verdict="BLOCKED",
                     domain="setup", action="lab-closed", surface="dom",
                     note=str(exc),
                 )

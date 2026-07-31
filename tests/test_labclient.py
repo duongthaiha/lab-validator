@@ -546,3 +546,90 @@ def test_a_lab_that_closes_mid_step_is_recorded_as_blocked_not_as_a_defect():
             "a closure handler exits 0, so the caller reads it as a step that "
             "worked and asks for the next one"
         )
+
+
+# --- literals handed to run.step have to be real ----------------------------
+#
+# `severity="blocker"` sat in the closed-lab handler through a full test suite,
+# a mutation sweep and a commit. It is not a severity -- the taxonomy has four,
+# and BLOCKED has none at all, because blocked is a *status*, not a finding.
+# Nothing caught it because reaching that line needs a lab that has closed, so
+# the first thing the refusal did in anger was raise ValueError from inside
+# runlog: a correct detection, published as a tool crash.
+#
+# Same shape as the missing import above, one layer along: these are error
+# paths, and error paths are the least-executed code carrying the most
+# load-bearing prose in the system.
+
+SOURCES = sorted(
+    p for p in [*(ROOT / "src" / "lab_validator").rglob("*.py"),
+                *(ROOT / "scripts").rglob("*.py")]
+)
+
+
+def _keyword_literals(path: Path, keyword: str) -> list[tuple[int, str]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg == keyword and isinstance(kw.value, ast.Constant):
+                if isinstance(kw.value.value, str):
+                    out.append((kw.value.lineno, kw.value.value))
+    return out
+
+
+def test_every_severity_literal_is_a_real_severity():
+    from lab_validator import runlog
+
+    bad = [
+        f"{path.name}:{line} severity={value!r}"
+        for path in SOURCES
+        for line, value in _keyword_literals(path, "severity")
+        if value not in runlog.SEVERITIES
+    ]
+    assert bad == [], (
+        f"{bad} -- runlog.step raises on an unknown severity, so this only "
+        f"shows up on the path that uses it. Known: {runlog.SEVERITIES}"
+    )
+
+
+def test_every_verdict_literal_is_a_real_verdict():
+    from lab_validator import runlog
+
+    bad = [
+        f"{path.name}:{line} verdict={value!r}"
+        for path in SOURCES
+        for line, value in _keyword_literals(path, "verdict")
+        if value not in runlog.VERDICTS
+    ]
+    assert bad == [], f"{bad} -- known verdicts: {sorted(runlog.VERDICTS)}"
+
+
+def test_blocked_is_recorded_without_a_severity():
+    """Blocked is a status, not a finding (approach.md 2.11).
+
+    Giving it a severity would rank it among the defects, which is exactly
+    backwards: a blocked lab is the most important thing a run can find, and it
+    belongs in the Blockers section rather than sorted in with the majors.
+    """
+    from lab_validator import taxonomy
+
+    assert taxonomy.default_severity("BLOCKED") is None, (
+        "BLOCKED has acquired a default severity; the report's blockers "
+        "section and its findings list would now disagree about what it is"
+    )
+
+    for path in SOURCES:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            kws = {kw.arg: kw.value for kw in node.keywords}
+            verdict = kws.get("verdict")
+            if not isinstance(verdict, ast.Constant) or verdict.value != "BLOCKED":
+                continue
+            assert "severity" not in kws, (
+                f"{path.name}:{node.lineno} records BLOCKED with a severity"
+            )
