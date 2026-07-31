@@ -19,6 +19,7 @@ from lab_validator.discovery import (  # noqa: E402
     Enrolment,
     descriptor_for,
     parse_enrolments,
+    resolve,
     scaffold,
     slugify,
     write_scaffold,
@@ -226,3 +227,118 @@ def test_descriptor_for_ignores_an_unrelated_or_broken_descriptor(tmp_path):
     (tmp_path / "broken.toml").write_text("not = = toml", encoding="utf-8")
     e = Enrolment(enrolment=999, title="Demo", href="/x")
     assert descriptor_for(e, tmp_path) is None
+
+
+# --- resolve: URL + name -> one lab --------------------------------------
+#
+# The contract is `walk --url ... --name ...`, so this is the very first thing
+# that happens in a run. Getting it wrong walks the wrong lab and reports every
+# finding against the wrong content, plausibly.
+
+CATALOGUE = [
+    {"text": "WorkshopPLUS - Azure AI Platform and Services",
+     "href": "/ClassEnrollment/5928204"},
+    {"text": "Launch", "href": "/ClassEnrollment/5928204"},
+    {"text": "WorkshopPLUS - Azure Kubernetes Service", "href": "/ClassEnrollment/6100001"},
+]
+
+
+def test_a_url_that_names_an_enrolment_wins_over_the_name():
+    """The learner already disambiguated by pasting that URL."""
+    r = resolve(CATALOGUE, "https://mslearningcampus.com/ClassEnrollment/6100001", "Azure AI")
+    assert r.ok
+    assert r.enrolment.enrolment == 6100001
+
+
+def test_a_catalogue_url_falls_back_to_the_name():
+    r = resolve(CATALOGUE, "https://mslearningcampus.com/Pages/ms-learningcampus",
+                "WorkshopPLUS - Azure AI Platform and Services")
+    assert r.ok
+    assert r.enrolment.enrolment == 5928204
+    assert r.reason == "exact title match"
+
+
+def test_a_partial_name_resolves_when_it_is_unique():
+    r = resolve(CATALOGUE, "https://mslearningcampus.com/", "kubernetes")
+    assert r.ok
+    assert r.enrolment.enrolment == 6100001
+
+
+def test_an_ambiguous_name_names_the_candidates_and_stops():
+    """Never guess. Two editions enrolled at once is the normal case, and the
+    closest match would be walked with total confidence."""
+    links = [
+        {"text": "WorkshopPLUS - Azure AI Platform (20250101)", "href": "/ClassEnrollment/1"},
+        {"text": "WorkshopPLUS - Azure AI Platform (20260301)", "href": "/ClassEnrollment/2"},
+    ]
+    r = resolve(links, "https://mslearningcampus.com/", "Azure AI Platform")
+    assert not r.ok
+    assert len(r.candidates) == 2
+    assert "2 enrolments match" in r.reason
+
+
+def test_a_name_that_matches_nothing_says_so():
+    r = resolve(CATALOGUE, "https://mslearningcampus.com/", "Power Platform Fundamentals")
+    assert not r.ok
+    assert r.candidates, "the reachable enrolments are still worth printing"
+    assert "no enrolment matches" in r.reason
+
+
+def test_a_signed_out_page_is_distinguishable_from_a_bad_name():
+    """Both fail, but only one is fixed by signing in, so they must not read
+    the same."""
+    r = resolve([], "https://mslearningcampus.com/", "anything")
+    assert not r.ok
+    assert "no launchable enrolment" in r.reason
+
+
+def test_an_enrolment_id_absent_from_the_page_is_not_silently_replaced():
+    r = resolve(CATALOGUE, "https://mslearningcampus.com/ClassEnrollment/999", "Azure AI")
+    assert not r.ok
+    assert "not on this page" in r.reason
+
+
+# --- Target.from_url: the descriptor stops being a precondition -----------
+
+
+def test_from_url_synthesises_a_target_with_no_descriptor(tmp_path):
+    """A brand-new lab must be walkable the moment someone pastes a URL. The
+    walk is what produces the expectations a descriptor would carry."""
+    t = Target.from_url("https://mslearningcampus.com/ClassEnrollment/5928204",
+                        "WorkshopPLUS - Azure AI Platform and Services", root=tmp_path)
+    assert not t.is_enriched
+    assert t.slug == "azure-ai-platform-and-services"
+    assert t.lab["enrollment"] == 5928204
+    assert t.enrollment_url == "https://mslearningcampus.com/ClassEnrollment/5928204"
+
+
+def test_from_url_reuses_a_curated_descriptor_matched_on_identity(tmp_path):
+    """Curated slugs are hand-shortened, so matching by name would miss the
+    descriptor it should have found and silently downgrade the run."""
+    (tmp_path / "azure-ai-platform.toml").write_text(
+        'slug = "azure-ai-platform"\nname = "Azure AI Platform"\n\n'
+        "[lab]\nid = 79233\nenrollment = 5928204\n\n"
+        '[expect]\nregion = "East US 2"\n',
+        encoding="utf-8",
+    )
+    t = Target.from_url("https://mslearningcampus.com/ClassEnrollment/5928204",
+                        "WorkshopPLUS - Azure AI Platform and Services", root=tmp_path)
+    assert t.is_enriched
+    assert t.slug == "azure-ai-platform"
+    assert t.expect["region"] == "East US 2"
+
+
+def test_an_unenriched_target_reports_what_it_cannot_check(tmp_path):
+    """Missing enrichment weakens a run; it must not silently weaken it."""
+    t = Target.from_url("https://mslearningcampus.com/ClassEnrollment/1", "New Lab",
+                        root=tmp_path)
+    gaps = t.enrichment_gaps()
+    assert any("region" in g for g in gaps)
+    assert any("models" in g for g in gaps)
+
+
+def test_from_url_ignores_a_broken_descriptor(tmp_path):
+    (tmp_path / "broken.toml").write_text("not = = toml", encoding="utf-8")
+    t = Target.from_url("https://mslearningcampus.com/ClassEnrollment/1", "New Lab",
+                        root=tmp_path)
+    assert not t.is_enriched

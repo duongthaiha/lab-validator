@@ -93,7 +93,7 @@ class Target:
     """
 
     slug: str
-    path: Path
+    path: Path | None
     data: dict
     problems: list[Problem] = field(default_factory=list)
 
@@ -192,6 +192,91 @@ class Target:
             "several target descriptors exist, so --target is required: "
             + ", ".join(slugs)
         )
+
+    # ---- starting from a URL instead of a descriptor ---------------------
+
+    @classmethod
+    def from_url(cls, url: str, name: str, root: Path | None = None) -> Target:
+        """Build a target from nothing but a lab URL and a human name.
+
+        This inverts the descriptor's role. Requiring ``targets/<slug>.toml``
+        before a run can start makes onboarding the gate: a brand-new lab cannot
+        be walked until somebody hand-authors expectations for a lab nobody has
+        walked yet, which is the wrong order. The walk is what *produces* those
+        expectations.
+
+        So the descriptor becomes **optional enrichment**:
+
+        * without one, a run still yields every *observation-based* finding --
+          broken links, defective sample code, missing UI, undocumented steps,
+          a model the portal refuses to deploy;
+        * with one, it additionally yields *expectation-based* findings -- "the
+          lab promised region X / model Y and I did not find it".
+
+        A descriptor already on disk is matched on **observed identity** (the
+        enrolment or lab id parsed out of the URL), never on the derived slug:
+        curated slugs are hand-shortened, so a name match would miss the very
+        descriptor it should have found and silently downgrade the run.
+        """
+        from .discovery import ENROLMENT_RE, LAB_RE, _first_group, slugify
+
+        enrolment = _first_group(ENROLMENT_RE.search(url))
+        lab_id = _first_group(LAB_RE.search(url))
+
+        for slug in cls.available(root):
+            try:
+                candidate = cls.inspect(slug, root=root)
+            except TargetError:
+                continue  # a broken descriptor is someone else's problem, not a match
+            lab = candidate.lab
+            if enrolment is not None and lab.get("enrollment") == enrolment:
+                return candidate
+            if lab_id is not None and lab.get("id") == lab_id:
+                return candidate
+
+        lab: dict = {"enrollment_url": url}
+        if enrolment is not None:
+            lab["enrollment"] = enrolment
+        if lab_id is not None:
+            lab["id"] = lab_id
+        return cls(
+            slug=slugify(name),
+            path=None,
+            data={"slug": slugify(name), "name": name, "lab": lab},
+        )
+
+    @property
+    def is_enriched(self) -> bool:
+        """Is this target backed by a curated descriptor on disk?
+
+        The distinction has to reach the report. A run with no descriptor cannot
+        make expectation-based findings at all, and a coverage table that does
+        not say so invites the reader to treat "nothing expected was missing" as
+        "everything expected was there".
+        """
+        return self.path is not None
+
+    def enrichment_gaps(self) -> list[str]:
+        """Checks that are unavailable because nothing declared an expectation.
+
+        Reported, not raised. Missing enrichment weakens a run; it does not
+        invalidate it, and a run that refuses to start is worth less than one
+        that starts and says what it could not check.
+        """
+        gaps: list[str] = []
+        expect = self.expect
+        if not expect.get("region"):
+            gaps.append("region -- cannot tell whether the lab landed where the text says")
+        if not expect.get("models"):
+            gaps.append("models -- cannot tell whether the promised deployments exist")
+        if not expect.get("resource_group") and not expect.get("resource_prefixes"):
+            gaps.append("resource naming -- cannot tell a missing resource from a renamed one")
+        if not self.environment.get("lab_files"):
+            gaps.append("lab_files -- cannot check the shipped sample code in place")
+        if not self.risks:
+            gaps.append("risks -- no structural dependency is re-asserted each run")
+        return gaps
+
 
     # ---- validation -----------------------------------------------------
 

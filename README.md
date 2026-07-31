@@ -126,22 +126,60 @@ A run is a folder of evidence: an append-only trace, numbered screenshots and a
 manifest recording how far the walk got. Segments are resumable checkpoints, so
 a run that ends early is still worth reading.
 
+### Start from a URL
+
+One command starts a run on any lab, including one this repo has never seen.
+The human's only job is the sign-in gesture — everything after it is automated.
+
 ```powershell
-python scripts/lab_run.py --targets                  # list lab descriptors
-python scripts/lab_run.py --check-target <slug>      # validate one strictly
-python scripts/lab_run.py --start                    # new run from the live lab
-python scripts/lab_run.py --status                   # progress and verdict counts
-python scripts/lab_run.py --next                     # next section to walk
-python scripts/lab_run.py --report                   # roll-up + every section report
-python scripts/lab_run.py --retract <seq> --note "…" # withdraw a finding
-python scripts/lab_text.py --segment s08 --tasks     # what the lab asks for here
+lab-validator walk --url "https://mslearningcampus.com/ClassEnrollment/5928204" `
+                   --name "WorkshopPLUS - Azure AI Platform and Services"
+```
+
+`walk` navigates to the URL, **blocks until you have signed in** (15 minutes by
+default, with a heartbeat so an unattended run survives a coffee break),
+resolves the URL and name to exactly one enrolment, clicks Launch, waits for the
+lab client to actually answer, extracts and segments the instructions, opens the
+run folder, and captures the lab's own credentials into a run-scoped vault.
+
+Two things it deliberately does **not** do:
+
+- **It never guesses which lab you meant.** If `--name` matches more than one
+  enrolment, it prints the candidates and stops. Walking the wrong lab produces
+  a report full of findings that all look plausible.
+- **It never dies on Launch.** The control is countdown-gated and sometimes
+  hidden, so if it cannot be clicked the run says `LAUNCH NEEDED`, asks you to
+  click it, and waits.
+
+A descriptor in `targets/` is **optional enrichment**, not a precondition.
+Without one you still get every *observation-based* finding — broken links,
+defective sample code, missing UI, dead models. With one you additionally get
+*expectation-based* findings ("the lab promised region X and I did not find
+it"). A run with no descriptor says so, loudly, in both the console and the
+manifest; silence there would read as "nothing was expected and nothing was
+missing", which is the opposite of the truth.
+
+### The rest of the commands
+
+`lab-validator` is a front door over the scripts, which all still work directly.
+
+```powershell
+lab-validator                                        # what exists
+lab-validator run --targets                          # list lab descriptors
+lab-validator run --check-target <slug>              # validate one strictly
+lab-validator run --start                            # new run from an already-open lab
+lab-validator run --status                           # progress and verdict counts
+lab-validator run --next                             # next section to walk
+lab-validator run --report                           # roll-up + every section report
+lab-validator run --retract <seq> --note "…"         # withdraw a finding
+lab-validator text --segment s08 --tasks             # what the lab asks for here
 ```
 
 Individual steps are driven with an **ordered** action list, so a click that
 must land before typing actually does:
 
 ```powershell
-python scripts/lab_step.py --segment s08 --label deploy `
+lab-validator step --segment s08 --label deploy `
   --do click:820,410 --do 'type:gpt-5-mini' --do key:Enter `
   --do until:quiet:4000 --do shot
 ```
@@ -234,7 +272,7 @@ becomes required rather than silently defaulting to whichever lab came first.
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 
-pip install -e ".[dev]"
+pip install -e ".[dev]"         # also puts `lab-validator` on PATH
 python -m playwright install chromium
 
 Copy-Item .env.example .env     # then fill in LV_SKILLABLE_API_KEY
@@ -265,11 +303,15 @@ scripts/browser_session.py          attach to a signed-in browser; recon command
 scripts/lab_drive.py                drive a running lab: instructions, creds, VM
 scripts/bootstrap_auth.py           fallback: sign-in → encrypted session
 
+src/lab_validator/cli.py            `lab-validator` front door; the walk command
 src/lab_validator/runlog.py         run folder, append-only trace, resume, redaction
+src/lab_validator/taxonomy.py       verdict codes and the instruction/setup domain axis
 src/lab_validator/corpus.py         instruction segmenter and structural checks
 src/lab_validator/report.py         trace → per-section reports + roll-up
+src/lab_validator/launch.py         sign-in gate, Launch automation, lab-client wait
+src/lab_validator/vault.py          run-scoped credential vault, captured once at start
 src/lab_validator/targets.py        target descriptor loader and validator
-src/lab_validator/discovery.py      enrolment parsing and descriptor scaffolding
+src/lab_validator/discovery.py      enrolment parsing, URL→lab resolution, scaffolding
 src/lab_validator/imaging.py        screenshot capture, downscaled view copies
 src/lab_validator/browser.py        CDP launch/attach, profile management
 src/lab_validator/labclient.py      lab frames, window.api.v1, VM screen/click/type

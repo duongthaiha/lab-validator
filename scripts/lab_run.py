@@ -30,6 +30,7 @@ from lab_validator.labclient import LabClient  # noqa: E402
 from lab_validator.report import render, write_segment  # noqa: E402
 from lab_validator.runlog import Run  # noqa: E402
 from lab_validator.targets import Target, TargetError  # noqa: E402
+from lab_validator.vault import Vault  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
@@ -102,14 +103,19 @@ async def cmd_start(args) -> int:
             ]
             run._save()
 
-            # Credential values are registered with the redactor up front so
-            # they can never reach the trace, whatever a later step does.
+            # Capture the lab's own credentials once, at the start. Two jobs in
+            # one action: every value is registered with the redactor so it can
+            # never reach the trace whatever a later step does, and the rows are
+            # kept so the run can use a credential as *data* -- which is what
+            # makes it possible to compare what the lab hands out against what
+            # the lab ships.
             try:
-                for cred in await lab.credentials():
-                    run.redactor.add(cred.value, f"{cred.scope}-{cred.label}".lower())
+                vault = Vault.capture(await lab.credentials(), run.redactor)
+                vault.save(run.dir)
                 await lab.show_instructions()
             except Exception as exc:
-                run.log(f"credential preload skipped: {type(exc).__name__}")
+                vault = None
+                run.log(f"credential capture skipped: {type(exc).__name__}: {exc}")
 
             print(f"run       : {run.dir}")
             print(f"instance  : {lab.instance_id}")
@@ -117,6 +123,15 @@ async def cmd_start(args) -> int:
             print(f"segments  : {len(outline.segments())}")
             print(f"anomalies : {len(outline.anomalies())} structural")
             print(f"secrets   : {len(run.redactor)} registered for redaction")
+            if vault is not None:
+                print(f"vault     : {len(vault)} credential(s) captured "
+                      f"-> {Vault.path_in(run.dir).name} (gitignored)")
+            else:
+                print("vault     : none -- credential reuse will fall back to the "
+                      "Resources tab")
+            if not target.is_enriched:
+                print("descriptor: none -- observation-based findings only; "
+                      "no expectation can be checked")
             return 0
         finally:
             await browser.close()

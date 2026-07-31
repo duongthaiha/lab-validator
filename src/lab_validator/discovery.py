@@ -24,7 +24,15 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["Enrolment", "slugify", "parse_enrolments", "scaffold", "descriptor_for"]
+__all__ = [
+    "Enrolment",
+    "Resolution",
+    "slugify",
+    "parse_enrolments",
+    "resolve",
+    "scaffold",
+    "descriptor_for",
+]
 
 #: ``/ClassEnrollment/5928204`` -- the launch entry point for one enrolment.
 ENROLMENT_RE = re.compile(r"/ClassEnrollment/(\d+)\b", re.I)
@@ -145,9 +153,80 @@ def parse_enrolments(links: list[dict]) -> list[Enrolment]:
     return sorted(best.values(), key=lambda e: e.title.lower())
 
 
+@dataclass(frozen=True)
+class Resolution:
+    """The answer to "which lab does this URL and name refer to?"
+
+    Three outcomes, and the ambiguous one is deliberately not collapsed into a
+    guess. A validator that picks the closest match will, on the day two
+    editions of a workshop are enrolled at once, walk the wrong one and report
+    81 findings against a lab nobody asked about -- and every one of them will
+    look plausible. Naming the candidates and stopping costs one round trip;
+    guessing costs the run's credibility.
+    """
+
+    enrolment: Enrolment | None
+    candidates: list[Enrolment]
+    reason: str
+
+    @property
+    def ok(self) -> bool:
+        return self.enrolment is not None
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def resolve(links: list[dict], url: str, name: str) -> Resolution:
+    """Pick the one enrolment a ``--url`` + ``--name`` pair identifies.
+
+    The URL is trusted first: if it names an enrolment id outright -- which the
+    ``/ClassEnrollment/<id>`` entry point does -- then the learner has already
+    disambiguated and the name is only a label. Otherwise the URL was a
+    catalogue or landing page, and the name has to do the work.
+
+    Name matching goes exact, then unique-substring, and stops. Fuzzy scoring is
+    deliberately absent: it turns "no match" into "some match", and this
+    function's most valuable answer is that it could not tell.
+    """
+    enrolments = parse_enrolments(links)
+    if not enrolments:
+        return Resolution(None, [], "no launchable enrolment found on that page")
+
+    from_url = _first_group(ENROLMENT_RE.search(url))
+    if from_url is not None:
+        exact = [e for e in enrolments if e.enrolment == from_url]
+        if exact:
+            return Resolution(exact[0], exact, f"the URL names enrolment {from_url}")
+        return Resolution(
+            None,
+            enrolments,
+            f"the URL names enrolment {from_url}, which is not on this page -- "
+            "the session may be signed out, or the enrolment may belong to another account",
+        )
+
+    wanted = _norm(name)
+    if not wanted:
+        return Resolution(None, enrolments, "no --name given, and the URL names no enrolment")
+
+    exact = [e for e in enrolments if _norm(e.title) == wanted]
+    if len(exact) == 1:
+        return Resolution(exact[0], exact, "exact title match")
+    if len(exact) > 1:
+        return Resolution(None, exact, f"{len(exact)} enrolments share that exact title")
+
+    partial = [e for e in enrolments if wanted in _norm(e.title)]
+    if len(partial) == 1:
+        return Resolution(partial[0], partial, "unique partial title match")
+    if len(partial) > 1:
+        return Resolution(None, partial, f"{len(partial)} enrolments match that name")
+
+    return Resolution(None, enrolments, f"no enrolment matches {name!r}")
+
+
 def _todo(key: str, how: str) -> str:
     return f"# TODO {key}: {how}"
-
 
 def scaffold(enrolment: Enrolment, slug: str | None = None) -> str:
     """Render a starter ``targets/<slug>.toml`` from what discovery observed.

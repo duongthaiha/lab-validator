@@ -1,0 +1,270 @@
+"""One entry point: ``lab-validator``.
+
+Until now every capability was a separate script under ``scripts/``, which is a
+fine shape for building an engine and a poor one for handing it to someone else:
+there is no single thing to run, no discoverable list of what exists, and the
+order the scripts must be used in lives only in a README.
+
+So this is a dispatcher, not a rewrite. The scripts keep their own ``main()``
+and keep working exactly as they did -- ``python scripts/lab_run.py --report``
+is still valid -- and this adds a front door over the top. The one genuinely new
+command is :func:`cmd_walk`, which is the contract the whole capability was
+asked for:
+
+    lab-validator walk --url "<lab url>" --name "<lab name>"
+
+The human signs in. The machine does everything else.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import contextlib
+import importlib.util
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS = ROOT / "scripts"
+
+#: sub-command -> script filename. Kept as data so the list is the help text.
+COMMANDS = {
+    "run": ("lab_run.py", "start, inspect and report on a validation run"),
+    "step": ("lab_step.py", "drive one step, recording it as trace evidence"),
+    "text": ("lab_text.py", "read the instruction corpus for a section"),
+    "corpus": ("lab_corpus.py", "extract and segment the instruction document"),
+    "discover": ("lab_discover.py", "list enrolments and scaffold a descriptor"),
+    "drive": ("lab_drive.py", "low-level VM console control"),
+    "session": ("browser_session.py", "browser profile, attach, sign-in helpers"),
+    "auth": ("bootstrap_auth.py", "prepare the dedicated browser profile"),
+}
+
+
+def _load(script: str):
+    """Import a script by path so the dispatcher does not duplicate its logic.
+
+    Path-based rather than a package import because the scripts deliberately
+    live outside the package: they are the operator-facing shims, and folding
+    them in would make the package depend on argparse surfaces that exist for
+    humans rather than for callers.
+    """
+    path = SCRIPTS / script
+    if not path.exists():
+        raise SystemExit(
+            f"{path} is missing. The CLI dispatches to the scripts in the checkout, "
+            "so it must be run from a clone rather than an installed wheel."
+        )
+    spec = importlib.util.spec_from_file_location(f"_labcli_{path.stem}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _delegate(script: str, argv: list[str]) -> int:
+    module = _load(script)
+    saved = sys.argv
+    sys.argv = [str(SCRIPTS / script), *argv]
+    try:
+        return module.main()
+    finally:
+        sys.argv = saved
+
+
+# ---- walk ----------------------------------------------------------------
+
+
+async def _walk(args) -> int:
+    from playwright.async_api import async_playwright
+
+    from .browser import attached_context
+    from .corpus import extract
+    from .discovery import resolve
+    from .launch import await_lab_client, click_launch, ensure_signed_in, signed_out
+    from .runlog import Run
+    from .targets import Target
+    from .vault import Vault
+
+    links_js = _load("browser_session.py").LINKS_JS
+
+    async with async_playwright() as pw:
+        browser, context = await attached_context(pw, args.port)
+        try:
+            page = context.pages[0] if context.pages else await context.new_page()
+            await page.bring_to_front()
+
+            print(f"url       : {args.url}")
+            await page.goto(args.url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
+
+            # 1. The sign-in gate. The human's job, permanently.
+            async def is_signed_in():
+                try:
+                    has_login = await page.get_by_role(
+                        "link", name="Sign In"
+                    ).or_(page.get_by_role("button", name="Sign In")).count() > 0
+                    return not signed_out(page.url, has_login)
+                except Exception:  # noqa: BLE001 - mid-navigation, try again
+                    return False
+
+            await ensure_signed_in(is_signed_in, budget_s=args.signin_budget)
+
+            # 2. URL + name -> exactly one enrolment. Never guess.
+            links = await page.evaluate(links_js)
+            found = resolve(links, args.url, args.name or "")
+            if not found.ok:
+                print(f"\ncould not identify the lab: {found.reason}", file=sys.stderr)
+                if found.candidates:
+                    print("\nreachable enrolments:", file=sys.stderr)
+                    for e in found.candidates:
+                        print(f"  {e}", file=sys.stderr)
+                    print(
+                        "\nRe-run with --name matching one of these exactly, or pass its "
+                        "/ClassEnrollment/<id> URL directly.",
+                        file=sys.stderr,
+                    )
+                return 2
+            enrolment = found.enrolment
+            print(f"lab       : {enrolment.title}")
+            print(f"            enrolment {enrolment.enrolment} ({found.reason})")
+
+            target = Target.from_url(enrolment.url, enrolment.title, root=ROOT / "targets")
+            print(f"descriptor: {target.slug}"
+                  + ("" if target.is_enriched else " (synthesised -- none on disk)"))
+
+            # 3. Launch. Automated, with a human fallback that is not a failure.
+            if enrolment.url not in page.url:
+                await page.goto(enrolment.url, wait_until="domcontentloaded")
+                await page.wait_for_timeout(2500)
+            outcome = await click_launch(page, budget_s=args.launch_budget)
+            if outcome.needs_human:
+                print(f"\n  LAUNCH NEEDED — {outcome.reason}")
+                print("  Click Launch yourself in the browser window. I will wait.")
+            lab = await await_lab_client(context, budget_s=args.client_budget)
+            print(f"instance  : {lab.instance_id}")
+
+            # 4. Instructions.
+            outline = await extract(lab.instructions)
+            artifacts = ROOT / "artifacts" / "instructions"
+            artifacts.mkdir(parents=True, exist_ok=True)
+            outline.save(artifacts / "outline.json")
+            (artifacts / "outline.md").write_text(outline.to_markdown(), encoding="utf-8")
+
+            run = Run.create(
+                ROOT / "runs",
+                target.name,
+                lab=target.lab,
+                instance=lab.instance_id,
+                corpus=artifacts / "outline.md",
+                agent=args.agent,
+                segments=outline.segments(),
+            )
+            run.manifest["targetSlug"] = target.slug
+            run.manifest["targetEnriched"] = target.is_enriched
+            run.manifest["enrichmentGaps"] = target.enrichment_gaps()
+            run.manifest["entryUrl"] = args.url
+            run.manifest["labMinutesAtStart"] = await lab.minutes_remaining()
+            run.manifest["structuralAnomalies"] = [
+                {"code": a.code, "severity": a.severity, "message": a.message}
+                for a in outline.anomalies()
+            ]
+            run._save()
+
+            # 5. Credentials: captured once, masked at the writer, kept as data.
+            try:
+                vault = Vault.capture(await lab.credentials(), run.redactor)
+                vault.save(run.dir)
+                await lab.show_instructions()
+                print(f"vault     : {len(vault)} credential(s) captured (gitignored)")
+            except Exception as exc:  # noqa: BLE001 - a missing tab must not end the run
+                run.log(f"credential capture skipped: {type(exc).__name__}: {exc}")
+                print(f"vault     : none — {type(exc).__name__}; reuse falls back to the tab")
+
+            print(f"run       : {run.dir}")
+            print(f"lab clock : {run.manifest['labMinutesAtStart']} min")
+            print(f"segments  : {len(outline.segments())}")
+            print(f"anomalies : {len(outline.anomalies())} structural")
+            if not target.is_enriched:
+                print("\n  No descriptor on disk, so this run makes OBSERVATION-based")
+                print("  findings only. It cannot check any of:")
+                for gap in target.enrichment_gaps():
+                    print(f"    - {gap}")
+            print("\nnext: lab-validator run --next")
+            return 0
+        finally:
+            await browser.close()
+
+
+def cmd_walk(args) -> int:
+    return asyncio.run(_walk(args))
+
+
+# ---- entry point ---------------------------------------------------------
+
+
+def _console_utf8() -> None:
+    """Stop a lab's own title from killing the run.
+
+    Windows consoles default to cp1252, and Skillable titles are full of
+    en-dashes -- "WorkshopPLUS - Azure AI Platform" is the exception, not the
+    rule. Printing one raises ``UnicodeEncodeError`` *mid-line*, which takes
+    down whatever was in progress. For a tool whose entire job is walking labs
+    whose titles it has never seen, that is not an edge case.
+
+    ``errors="replace"`` is deliberate: a mangled character in a console echo
+    costs nothing, because the artefacts on disk are written separately and are
+    real UTF-8. Losing an hour-long walk to a dash costs a great deal.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        with contextlib.suppress(Exception):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
+def main() -> int:
+    _console_utf8()
+    parser = argparse.ArgumentParser(
+        prog="lab-validator",
+        description="Walk a Skillable lab as a learner and report where it has drifted.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="\n".join(
+            ["commands:", "  walk     start a run from a lab URL (the human signs in)"]
+            + [f"  {name:<9}{help}" for name, (_, help) in COMMANDS.items()]
+        ),
+    )
+    parser.add_argument("command", nargs="?", help="walk, or one of: " + ", ".join(COMMANDS))
+    parser.add_argument("rest", nargs=argparse.REMAINDER)
+    args, _ = parser.parse_known_args()
+
+    if args.command is None:
+        parser.print_help()
+        return 0
+
+    if args.command == "walk":
+        from .browser import DEFAULT_CDP_PORT
+
+        w = argparse.ArgumentParser(prog="lab-validator walk")
+        w.add_argument("--url", required=True, help="the lab or catalogue URL")
+        w.add_argument("--name", help="the lab's title, to disambiguate the URL")
+        w.add_argument("--agent", default="lab-validator", help="who is walking")
+        w.add_argument("--signin-budget", type=float, default=900.0,
+                       help="seconds to wait for a human to sign in")
+        w.add_argument("--launch-budget", type=float, default=180.0,
+                       help="seconds to wait for Launch to become clickable")
+        w.add_argument("--client-budget", type=float, default=300.0,
+                       help="seconds to wait for the lab client to answer")
+        w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
+        return cmd_walk(w.parse_args(args.rest))
+
+    if args.command in COMMANDS:
+        return _delegate(COMMANDS[args.command][0], args.rest)
+
+    parser.print_help(sys.stderr)
+    print(f"\nunknown command {args.command!r}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

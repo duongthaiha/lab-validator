@@ -28,6 +28,9 @@ dev = [
     "pre-commit>=4.0",
 ]
 
+[project.scripts]
+lab-validator = "lab_validator.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

@@ -588,6 +588,63 @@ each compared against something.
 
 ---
 
+### 2.12 Packaging lessons: what breaks when a capability leaves its author's hands
+
+Phase 8 turned a working engine into something a stranger can point at a URL. The engine
+did not change much; what changed is which assumptions were still allowed to be implicit.
+Four are worth carrying to any similar tool.
+
+**A mapping from a name to a file will rot, and it will rot silently.** The verdict
+taxonomy had three sources of truth that disagreed — `runlog.py` accepted `LAB009`,
+`report.py`'s `CODE_NAMES` stopped at `LAB008`, and no document defined either. Nothing
+failed. The run completed, the report rendered, and **40 findings — the second-largest
+category in the workshop — printed as `LAB009 — LAB009`** in the deliverable. The fix is
+not "remember to update both": it is one module that owns the mapping and a test that
+asserts *identity* (`runlog.VERDICTS is taxonomy.VERDICTS`) rather than equality, because
+two equal-but-separate dicts drift apart again the moment someone edits one. The same
+shape recurred immediately in the CLI dispatcher — a table of sub-command → script — so it
+got the same guard: a test that every advertised command resolves to a file that exists
+and exposes the entry point the dispatcher calls.
+
+**A tool that walks arbitrary content must survive arbitrary content — starting with its
+name.** `lab_run.py --status` crashed with `UnicodeEncodeError` when printing a section
+title, because Windows consoles default to cp1252 and Skillable titles are full of
+en-dashes. This is not an edge case for a validator whose entire premise is labs it has
+never seen. Hardening `sys.stdout` with `errors="replace"` at the single front door fixes
+every command at once; a mangled character in a console echo costs nothing because the
+artefacts on disk are written separately and are real UTF-8, whereas losing an hour-long
+walk to a dash costs a great deal.
+
+**The onboarding artefact must not be the gate.** Requiring `targets/<slug>.toml` before a
+run could start meant a new lab could not be walked until someone hand-authored
+expectations for a lab nobody had walked yet — the wrong order, since the walk is what
+*produces* those expectations. Inverting it (descriptor as optional enrichment) is what
+makes `--url` a real contract. The discipline that keeps it honest is principle 9: a run
+with no descriptor must **say what it therefore cannot check**, in the console and in the
+manifest. Silence would read as "nothing was expected and nothing was missing" — the exact
+opposite of the truth.
+
+**Capture and registration have to be the same action.** Credentials were already read at
+`--start` and fed to the redactor, then discarded — so every later reuse went back to the
+live Resources tab through the DOM, and a credential could never be used as *data*. Making
+`Vault.capture()` register with the redactor *inside* capture means there is no code path
+that can obtain a value without masking it. This is why capturing lab-issued credentials
+**improves** safety rather than weakening it: the redactor can only mask values it knows.
+The residual risk is unchanged and still stated plainly — **screenshots are pixels and the
+redactor is text-only**, which is why `runs/` is gitignored.
+
+One more, about testing: the pieces with the worst feedback loop deserve fakes most.
+`walk` costs a human sign-in and burns lab clock on every rehearsal, so a wiring bug — a
+property awaited, an attribute renamed, a coroutine never scheduled — would surface with
+somebody sitting watching it. Stubbing only the browser-touching seams and letting
+`resolve`, `Target.from_url`, `Run.create` and `Vault.capture` run for real caught three
+such bugs before any lab was launched. The same argument applies to waiting policy: give
+`wait_for` an injectable clock and a fifteen-minute budget becomes a test that runs in
+microseconds, so "does an unattended run survive a human walking away?" is a question with
+an answer rather than a hope.
+
+---
+
 ## 3. Recommended architecture
 
 ### 3.1 The control-surface ladder
