@@ -24,6 +24,7 @@ anywhere else.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -138,6 +139,27 @@ def build(runs_root: Path) -> Run:
     return run
 
 
+#: Printed when an unpinned drive stalls. `auto` lets Copilot route, and the
+#: routing is sensitive to the prompt -- adding five lines of *unrelated* text
+#: to the Rules block was measured flipping this fixture from a clean walk to
+#: three stalls, while the same edit under a pinned model walked cleanly both
+#: ways. So an unpinned stall is not evidence about the change under test, and
+#: saying nothing here invites the reader to revert a good edit.
+STALLED = "stall(s)."
+CONFOUND = """
+  NOTE: this ran on `auto`, so Copilot chose the model, and that choice moves
+  with the prompt -- a few extra lines anywhere in it can route the turn to a
+  different model. A stall here is therefore NOT yet evidence that the change
+  you made is wrong. Re-run with the model held constant before concluding
+  anything, comparing your change against the version you started from:
+
+      python scripts/agent_smoke.py --drive --model gpt-5.4
+
+  (`copilot --help` lists the models this CLI accepts; the name above will
+  retire eventually, which is exactly why `auto` remains the default for real
+  runs.)"""
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--runs", type=Path, default=ROOT / "runs", help="runs root")
@@ -164,7 +186,25 @@ def main() -> int:
     # process's stdout is block-buffered when piped -- so without it the header
     # lands *after* the run it introduces.
     print(f"\n$ {' '.join(argv[2:])}\n", flush=True)
-    return subprocess.run(argv, cwd=str(ROOT), check=False).returncode  # noqa: S603
+
+    # Teed, not captured: the drive takes minutes and prints a move at a time,
+    # so swallowing it until the end would trade a live view for one string
+    # match. The child is forced to UTF-8 *and* decoded as UTF-8 -- setting one
+    # without the other is the defect from 2.19, where a cp1252 parent hit an
+    # em-dash and lost the whole stream silently.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    seen: list[str] = []
+    with subprocess.Popen(  # noqa: S603
+        argv, cwd=str(ROOT), env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+    ) as proc:
+        for line in proc.stdout or []:
+            print(line, end="", flush=True)
+            seen.append(line)
+
+    if not args.model and any(STALLED in line for line in seen):
+        print(CONFOUND, flush=True)
+    return proc.returncode
 
 
 if __name__ == "__main__":

@@ -13,18 +13,29 @@ import asyncio
 import importlib.util
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from lab_validator.imaging import QUIET_THRESHOLD
+from lab_validator.imaging import stability
 from lab_validator.labclient import Credential
 from lab_validator.runlog import Redactor, Run, Segment
 from lab_validator.vault import Vault
 
 ROOT = Path(__file__).resolve().parents[1]
+
+#: Frames from the run that recorded PASS for a rejected sign-in. Kept as a
+#: regression fixture: synthetic frames cannot reproduce the overlap that made
+#: the threshold impossible, because the real ones differ by a line of text.
+REAL = ROOT / "runs" / "2026-08-01T0948Z" / "images"
+
+#: The reference walk, which contains a *successful* VM sign-in: the lock screen
+#: followed by the "Welcome" screen. Needed because the failing run never got
+#: one, and a single class of frame cannot show an overlap.
+REF = ROOT / "runs" / "2026-07-30T0749Z" / "images"
 
 
 def _lab_step():
@@ -125,6 +136,17 @@ def _last_step(run: Run) -> dict:
     return json.loads(lines[-1])
 
 
+def _unlocked(run: Run) -> Run:
+    """Satisfy the ordering guard, the way a real walk does.
+
+    `signin:portal` is refused until the VM has been signed in to, so any test
+    about the portal path has to get there legitimately rather than by editing
+    the trace.
+    """
+    _signin(run, FakeLab([_frame((8, 64, 112)), _frame((30, 30, 30))]), "vm")
+    return run
+
+
 # --- the credential is chosen by role, never by the caller ------------------
 
 
@@ -141,7 +163,7 @@ def test_signin_vm_types_the_machine_password_not_the_portal_one(tmp_path):
 
 
 def test_signin_portal_types_the_portal_password(tmp_path):
-    run = _run_with_vault(tmp_path)
+    run = _unlocked(_run_with_vault(tmp_path))
     lab = FakeLab([_frame((8, 64, 112)), _frame((250, 250, 250))])
     _signin(run, lab, "portal")
     assert lab.typed == ["PortalSecret1!"]
@@ -161,103 +183,213 @@ def test_signin_defaults_to_the_password_field(tmp_path):
 
 
 def test_signin_username_takes_the_account_field_of_the_same_role(tmp_path):
-    run = _run_with_vault(tmp_path)
+    run = _unlocked(_run_with_vault(tmp_path))
     lab = FakeLab([_frame((8, 64, 112)), _frame((30, 30, 30))])
     _signin(run, lab, "portal/username")
     assert lab.typed == ["learner@example.invalid"]
 
 
-# --- the verdict is read from the frame, not from the keystrokes -----------
+# --- the order is not a parameter either -----------------------------------
 
 
-def test_an_unchanged_screen_is_not_a_pass(tmp_path):
-    """The whole point of measuring: sending input is not evidence of anything."""
-    run = _run_with_vault(tmp_path)
-    still = _frame((8, 64, 112))
-    _signin(run, FakeLab([still, still]), "vm")
-    assert _last_step(run)["verdict"] != "PASS"
+def test_portal_before_vm_is_refused_without_typing_anything(tmp_path):
+    """The defect the second live run showed, after the first fix.
 
+    Binding the credential to the role fixed only half of it. The model *did*
+    call `signin:`, and still asked for `portal` while looking at a Windows
+    lock screen captioned `Admin` with a password box on it -- because its task
+    said "sign in to the Azure portal".
 
-def test_re_encoding_noise_does_not_count_as_the_screen_changing(tmp_path):
-    """The guard against the guard's own first draft.
-
-    `before != after` on JPEG bytes is true here -- the frames differ by a
-    handful of pixels, exactly as a caret blink or a re-encode differs -- so a
-    byte comparison would record PASS on a console that did not move. This test
-    is the one that fails if anyone reaches for equality again.
+    These keystrokes go to the VM. A cloud sign-in inside the VM's browser is
+    unreachable until the machine is unlocked, so this request cannot be
+    correct whatever the screen shows, and no amount of looking at the screen
+    is needed to know that.
     """
     run = _run_with_vault(tmp_path)
-    before, after = _frame((8, 64, 112)), _frame((8, 64, 112), noise=3)
-    assert before != after, "the fixture must differ by bytes or it proves nothing"
-    _signin(run, FakeLab([before, after]), "vm")
-    assert _last_step(run)["verdict"] != "PASS"
+    lab = FakeLab([_frame((8, 64, 112))])
+    module = _lab_step()
+    with pytest.raises(module.Stop) as exc:
+        _signin(run, lab, "portal")
+    assert lab.typed == [], "a refused sign-in must not have typed"
+    assert "signin:vm" in str(exc.value), "the refusal must name the move to make"
 
 
-def test_an_unchanged_screen_records_blocked_and_not_a_finding(tmp_path):
-    """Keystrokes reaching nothing is a fact about the console.
+def test_the_vm_sign_in_itself_is_never_blocked_by_the_ordering_guard(tmp_path):
+    """Otherwise nothing could ever go first."""
+    run = _run_with_vault(tmp_path)
+    lab = FakeLab([_frame((8, 64, 112)), _frame((30, 30, 30))])
+    _signin(run, lab, "vm")
+    assert lab.typed == ["VmSecret9"]
 
-    Filing it as a lab defect is 2.22's dead-pane finding again: a real
-    observation, correctly made, attributed to the wrong thing.
+
+def test_the_ordering_guard_reads_the_trace_so_a_resumed_run_inherits_it(tmp_path):
+    """`auto --run <folder>` rebuilds from disk; this must not be the one fact
+    that resets.
+
+    A fresh `Run` object over the same folder still knows the VM was signed in
+    to, because the guard reads `trace.jsonl` rather than memory.
     """
     run = _run_with_vault(tmp_path)
-    still = _frame((8, 64, 112))
-    _signin(run, FakeLab([still, still]), "vm")
+    _signin(run, FakeLab([_frame((8, 64, 112)), _frame((30, 30, 30))]), "vm")
+
+    resumed = Run.open(run.dir)
+    lab = FakeLab([_frame((8, 64, 112)), _frame((250, 250, 250))])
+    _signin(resumed, lab, "portal")
+    assert lab.typed == ["PortalSecret1!"]
+
+
+def test_only_a_vm_sign_in_satisfies_the_guard_not_any_sign_in(tmp_path):
+    """The guard must not be satisfied by the thing it exists to prevent.
+
+    Today `startswith("signin:")` would behave identically, because a non-vm
+    sign-in cannot reach the trace without a vm one preceding it -- but that
+    argument is circular: it holds only while this very guard holds. So the
+    trace is seeded directly, bypassing `do_signin`, and the refusal must
+    survive it. Otherwise a later exemption for some third role would quietly
+    unlock the guard for every role at once.
+    """
+    run = _run_with_vault(tmp_path)
+    run.step(
+        "s00",
+        action="signin:portal/password",
+        surface="vm",
+        verdict="DEFERRED",
+        severity=None,
+        note="seeded, not performed",
+    )
+    lab = FakeLab([_frame((8, 64, 112))])
+    module = _lab_step()
+    with pytest.raises(module.Stop):
+        _signin(run, lab, "portal")
+    assert lab.typed == []
+
+
+# --- the verdict does not come from the pixels -----------------------------
+#
+# Measured on real frames from this lab:
+#
+#     lock screen -> "The password is incorrect"   0.80   FAILED
+#     lock screen -> "Welcome"                     0.23   SUCCEEDED
+#     lock screen -> "Welcome"                     1.20   SUCCEEDED
+#
+# A success can score below a failure. Both screens are the same flat blue with
+# the same avatar and the same account name; the only difference is one line of
+# text. No threshold separates those populations, so the action must not try.
+
+
+def test_a_sign_in_never_claims_pass_however_much_the_screen_moved(tmp_path):
+    """Whatever the delta, the outcome is not established here.
+
+    The previous version passed at delta > 0.6 and recorded PASS for a real
+    rejection that measured 0.80.
+    """
+    run = _run_with_vault(tmp_path)
+    for before, after in [
+        (_frame((8, 64, 112)), _frame((8, 64, 112))),           # nothing moved
+        (_frame((8, 64, 112)), _frame((8, 64, 112), noise=3)),  # a caret's worth
+        (_frame((8, 64, 112)), _frame((250, 250, 250))),        # whole screen
+    ]:
+        _signin(run, FakeLab([before, after]), "vm")
+        assert _last_step(run)["verdict"] != "PASS"
+
+
+def test_a_sign_in_defers_rather_than_guessing(tmp_path):
+    """DEFERRED, not BLOCKED and not a finding.
+
+    The action was performed; its outcome is settled by a screenshot. Calling
+    it BLOCKED would claim it failed, and calling it a finding would blame the
+    lab for something not yet observed.
+    """
+    run = _run_with_vault(tmp_path)
+    _signin(run, FakeLab([_frame((8, 64, 112)), _frame((250, 250, 250))]), "vm")
     step = _last_step(run)
-    assert step["verdict"] == "BLOCKED"
+    assert step["verdict"] == "DEFERRED"
     assert not step.get("severity")
 
 
-def test_a_changed_screen_does_not_claim_the_sign_in_worked(tmp_path):
-    """A rejection repaints too.
+def test_the_note_says_the_delta_cannot_settle_it_and_what_can(tmp_path):
+    """A deferral that does not say who settles it is just a shrug.
 
-    "The password is incorrect" is a repaint, so magnitude cannot separate
-    success from failure without a threshold nobody calibrated. The note has to
-    say what was established and where the rest is settled.
+    The `or` this used to contain made it vacuous: truncating the note to
+    "capture the screen." satisfied the alternative and left the reader with an
+    instruction and no way to act on it. Both halves are required -- go and
+    look, *and* here is what you are looking for.
     """
     run = _run_with_vault(tmp_path)
     _signin(run, FakeLab([_frame((8, 64, 112)), _frame((250, 250, 250))]), "vm")
     note = _last_step(run)["note"].lower()
-    assert "input landed" in note
-    assert "not established" in note
-    assert "next capture" in note
+    assert "cannot tell" in note, "it must say the measurement is not the answer"
+    assert "read it" in note, "it must say to go and look"
+    assert "password box" in note and "failed" in note, (
+        "it must say what a failure looks like -- 'go and look' with no idea "
+        "what at is how thirteen wrong passwords got typed in the first place"
+    )
 
 
-def test_the_measured_delta_is_recorded_on_both_verdicts(tmp_path):
-    """A verdict derived from a number should show the number -- either way.
+def test_the_real_failed_sign_in_frames_do_not_produce_a_pass(tmp_path):
+    """Regression, against the actual frames from the run that got it wrong.
 
-    Both branches, deliberately. The first version of this test only exercised
-    the unchanged path, so deleting the delta from the *moved* path left it
-    green: a guard aimed at the branch the bug was not in.
+    Not synthetic: these are the lock screen and the "The password is
+    incorrect. Try again." screen that the tool recorded as PASS.
     """
-    still = _frame((8, 64, 112))
-    blocked = _run_with_vault(tmp_path / "a")
-    _signin(blocked, FakeLab([still, still]), "vm")
-    assert "delta" in _last_step(blocked)["note"].lower()
-
-    passed = _run_with_vault(tmp_path / "b")
-    _signin(passed, FakeLab([_frame((8, 64, 112)), _frame((250, 250, 250))]), "vm")
-    assert "delta" in _last_step(passed)["note"].lower()
-
-
-def test_the_threshold_is_the_one_the_probe_already_calibrated(tmp_path):
-    """Not a second opinion about what "the same screen" means.
-
-    A frame pair either side of QUIET_THRESHOLD must land either side of the
-    verdict, so the action cannot drift away from the quiet probe's calibration.
-    """
-    from lab_validator.imaging import stability
-
-    quiet = (_frame((8, 64, 112)), _frame((8, 64, 112), noise=3))
-    moved = (_frame((8, 64, 112)), _frame((250, 250, 250)))
-    assert stability(*quiet) <= QUIET_THRESHOLD < stability(*moved)
+    lock = REAL / "0004-s00-create-microsoft-screen-state.jpg"
+    err = REAL / "0005-s00-create-microsoft-after-signin.jpg"
+    if not (lock.exists() and err.exists()):
+        pytest.skip("evidence run not present")
 
     run = _run_with_vault(tmp_path)
-    _signin(run, FakeLab(list(quiet)), "vm")
-    assert _last_step(run)["verdict"] == "BLOCKED"
+    _signin(run, FakeLab([lock.read_bytes(), err.read_bytes()]), "vm")
+    assert _last_step(run)["verdict"] != "PASS"
 
-    run2 = _run_with_vault(tmp_path / "second")
-    _signin(run2, FakeLab(list(moved)), "vm")
-    assert _last_step(run2)["verdict"] == "PASS"
+
+def test_the_measured_delta_is_recorded_as_a_number_not_just_the_word(tmp_path):
+    """The delta decides nothing, so it must at least be *auditable*.
+
+    Two ways this test has been vacuous. The first version only exercised the
+    unchanged path, so deleting the delta from the moved path left it green.
+    The second asserted the word "delta", which survives in the note's own
+    explanation of why the delta cannot settle anything -- so removing the
+    measurement still passed. It has to look for the number.
+    """
+    for frames in [
+        [_frame((8, 64, 112)), _frame((8, 64, 112))],
+        [_frame((8, 64, 112)), _frame((250, 250, 250))],
+    ]:
+        run = _run_with_vault(tmp_path / str(id(frames)))
+        _signin(run, FakeLab(frames), "vm")
+        note = _last_step(run)["note"]
+        assert re.search(r"delta \d+\.\d", note), f"no measurement in: {note}"
+
+
+def test_success_and_failure_frames_overlap_so_no_threshold_can_exist(tmp_path):
+    """The measurement that closed this question, kept as a test.
+
+    Someone will eventually look at `signin:` returning DEFERRED every time and
+    think a threshold would be tidier. It would not: these are the real frames,
+    and a successful sign-in scores *below* a failed one.
+
+        lock -> "The password is incorrect"   0.80   FAILED
+        lock -> "Welcome"                     0.23   SUCCEEDED
+
+    Both screens are the same flat blue with the same avatar and the same
+    account name. The only difference is a line of text, and mean pixel
+    difference cannot read text.
+    """
+    lock = REAL / "0004-s00-create-microsoft-screen-state.jpg"
+    err = REAL / "0005-s00-create-microsoft-after-signin.jpg"
+    welcome = REF / "0003-s00-create-microsoft-desktop.jpg"
+    login = REF / "0002-s00-create-microsoft-login.jpg"
+    if not all(p.exists() for p in (lock, err, welcome, login)):
+        pytest.skip("evidence runs not present")
+
+    failed = stability(lock.read_bytes(), err.read_bytes())
+    succeeded = stability(login.read_bytes(), welcome.read_bytes())
+
+    assert succeeded < failed, (
+        f"a successful sign-in ({succeeded:.2f}) must still measure below a failed "
+        f"one ({failed:.2f}) -- if this ever stops being true, re-open the question "
+        "of whether a threshold is possible, but do not assume it"
+    )
 
 
 # --- secrets never reach the trace -----------------------------------------

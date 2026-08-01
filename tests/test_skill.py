@@ -223,18 +223,54 @@ GUIDANCE = ROOT / "docs" / "approach.md"
 
 @pytest.mark.parametrize("name", sorted(DOCS) + ["docs/approach.md"])
 def test_no_heading_is_hidden_from_a_plain_search(name):
-    """Headings start at column 0, so `^#` finds every one of them.
+    """Headings start at column 0 *on their own line*, so `^#` finds every one.
 
-    Indented headings render fine and are therefore invisible until someone
-    greps for a section, gets nothing, and concludes it does not exist.
+    Two ways to lose a heading, both of which render acceptably and are
+    therefore invisible until someone greps for a section, gets nothing, and
+    concludes it does not exist.
+
+    Indenting one was the first, and is what this test was written for. Gluing
+    one to the end of the paragraph above it -- `...wrong thing.## 3. Title` --
+    is the second, found when an insertion swallowed the newline before
+    `## 3. Recommended architecture`. That one is worse: an indented heading
+    still renders as a heading, while a glued one renders as *body text*, so
+    the document silently loses a section from its own structure. It also
+    quietly breaks the cross-reference check below, whose heading set is built
+    with `^#{1,6}` -- so a real `\u00a73.1` would have been reported as a citation
+    to a section that does not exist.
     """
     path = DOCS.get(name) or GUIDANCE
-    hidden = [
+    body = path.read_text(encoding="utf-8")
+
+    indented = [
         line
-        for line in path.read_text(encoding="utf-8").splitlines()
+        for line in body.splitlines()
         if re.match(r"[ \t]+#{1,6} \S", line) and not line.lstrip().startswith("#!")
     ]
-    assert not hidden, f"{name}: indented headings are invisible to a plain search: {hidden}"
+    assert not indented, f"{name}: indented headings are invisible to a plain search: {indented}"
+
+    # Fenced blocks hold comments -- `# /User/CurrentTraining/{userId}` in TOML,
+    # `#!/usr/bin/env` in shell -- which are not headings and never will be.
+    # Blanked rather than deleted so the reported context stays near the right
+    # place in the file.
+    prose = re.sub(
+        r"^```.*?^```", lambda m: "\n" * m.group(0).count("\n"), body, flags=re.M | re.S
+    )
+
+    # A `#` that follows anything other than a newline is not opening a heading.
+    # The lookbehind must exclude `#` as well, or the pattern simply starts at
+    # the second hash of a legitimate `##` and reports every heading in the
+    # file -- which is what the first draft of this guard did. Backticks and
+    # backslashes are excluded because `## 3.` inside prose or a code span is a
+    # reference to a heading, not one.
+    glued = [
+        prose[max(0, m.start() - 45) : m.end() + 35]
+        for m in re.finditer(r"(?<=[^\n#`\\])#{1,6} \S", prose)
+    ]
+    assert not glued, (
+        f"{name}: a heading glued to the line above renders as body text and "
+        f"disappears from the document's structure: {glued}"
+    )
 
 
 def test_every_section_cross_reference_resolves():

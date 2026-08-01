@@ -255,14 +255,44 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
     the task name is how an Azure e-mail address ends up in a Windows password
     box, and how the rejection that follows gets written up as a lab defect.
 
-    Records the outcome against the screen rather than the keystrokes: a frame
-    unchanged after a sign-in means the sign-in did not take, and saying so once
-    is better than retyping the same secret until a budget runs out.
+    **The order is not a parameter either.** These keystrokes go to the VM, and
+    a cloud sign-in inside the VM's browser is unreachable until the machine
+    itself is unlocked, so ``signin:portal`` before any ``signin:vm`` is a
+    request that cannot be correct whatever the screen shows. It is refused
+    rather than typed. That refusal exists because binding the credential to the
+    role fixed only half the problem: the second live run *did* call ``signin:``,
+    and still asked for ``portal`` while looking at a Windows lock screen
+    captioned ``Admin`` with a password box on it.
+
+    **The verdict does not come from the pixels**, and the measurements are the
+    reason. A *failed* sign-in -- lock screen to "The password is incorrect" --
+    scores 0.80. A *successful* one -- lock screen to "Welcome" -- scores 0.23
+    and 1.20 in the reference run. Success can measure less than failure,
+    because both screens are the same flat blue with the same avatar and the
+    only difference is a line of text. Nothing separates them by magnitude, so
+    this records ``DEFERRED`` and names the next capture as what settles it.
+    Reading "The password is incorrect" off a screenshot is something the model
+    does reliably; inventing a threshold that cannot exist is not.
     """
     role, _, field = arg.partition("/")
     role, field = role.strip().lower(), (field.strip().lower() or "password")
     if field not in ROLE_FIELDS:
         raise Stop(f"signin field must be one of {sorted(ROLE_FIELDS)}, not {field!r}")
+
+    # The ordering guard. Read from the trace rather than kept in memory so a
+    # resumed run inherits it: `auto --run <folder>` rebuilds everything else
+    # from disk and this must not be the one fact that resets.
+    if role != "vm" and not any(
+        str(s.get("action", "")).startswith("signin:vm") for s in run.steps()
+    ):
+        raise Stop(
+            f"signin:{arg} refused: these keystrokes go to the VM, and nothing has "
+            "signed in to the VM yet. A cloud sign-in inside the VM's browser is "
+            "unreachable until the machine is unlocked, so this cannot be the right "
+            "move whatever the screen looks like -- and a Windows lock screen "
+            "showing an account name and a password box is exactly what it looks "
+            "like. Use signin:vm first."
+        )
 
     # Priming happens inside load, so a resumed run cannot type a secret the
     # writer has never been told about.
@@ -290,39 +320,37 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
     await asyncio.sleep(6)
     after = await lab.screen_bytes()
 
-    # Byte equality is the obvious test and `imaging.stability` exists because it
-    # is wrong here: the console re-encodes its framebuffer and a caret blinks,
-    # so two identical screens almost never compare equal and every sign-in
-    # would record PASS whatever it typed.
+    # Recorded for audit, never used to decide anything. Measured on real
+    # frames from this lab:
+    #
+    #     lock screen -> "The password is incorrect"   0.80   (FAILED)
+    #     lock screen -> "Welcome"                     0.23   (SUCCEEDED)
+    #     lock screen -> "Welcome"                     1.20   (SUCCEEDED)
+    #
+    # A success can score below a failure, because both screens are the same
+    # flat blue with the same avatar and the same account name; the only
+    # difference is one line of text. No threshold separates those populations,
+    # and the earlier version's 0.6 line recorded PASS for the rejection above.
+    # Byte equality is worse still -- consecutive identical frames from this
+    # console measure 0.00, so even "nothing moved" proves nothing.
     delta = stability(before, after)
-    landed = delta > QUIET_THRESHOLD
 
-    # What this can and cannot prove. A screen that moved shows the keystrokes
-    # reached something; it does NOT show the credential was accepted, because a
-    # rejection also repaints -- that is what "the password is incorrect" is.
-    # Separating those two by magnitude would be a threshold nobody calibrated,
-    # so the verdict claims only the part that is established and the note says
-    # where the rest gets settled: the next capture.
-    # `severity=None`, not `""`: BLOCKED carries no severity and `run.step`
-    # validates the value. An empty string reads as "no severity" and is
-    # rejected -- which the first draft of this function did on its PASS path.
+    # DEFERRED, always: the action was performed and its outcome is settled
+    # somewhere else. That is not a hedge, it is the honest reading -- and the
+    # place it gets settled is a screenshot, which the model reads well. It
+    # transcribed "The password is incorrect. Try again." correctly on the run
+    # that failed; what it could not do was choose the credential. Perception
+    # to the model, binding to the code.
     run.step(
         segment,
         action=f"signin:{role}/{field}",
         surface="vm",
-        verdict="PASS" if landed else "BLOCKED",
+        verdict="DEFERRED",
         severity=None,
         note=(
-            f"{chosen.scope}/{chosen.label}; "
-            + (
-                f"screen moved (delta {delta:.1f}) -- input landed; whether it was "
-                "accepted is not established here, read the next capture"
-                if landed
-                else f"screen unchanged (delta {delta:.1f}) after 6s -- the "
-                "keystrokes reached nothing. Not a credential defect: check the "
-                "console is live and the field focused before concluding anything "
-                "about the lab"
-            )
+            f"{chosen.scope}/{chosen.label} typed (delta {delta:.1f}); the delta "
+            "cannot tell acceptance from rejection on this console -- capture the "
+            "screen and read it. A password box or an error message means it failed"
         ),
     )
     return 0

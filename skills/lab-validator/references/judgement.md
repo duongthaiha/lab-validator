@@ -412,3 +412,54 @@ caller a parameter that names the *purpose* instead of the *value*. Judgement
 should be spent on what cannot be derived. A caller that cannot express the
 wrong choice cannot make it — which is a stronger guarantee than any instruction
 telling it to be careful.
+
+**Apply the same test one level up.** Binding the value may leave the *order*
+free, and an order can be just as determinable. If step B is physically
+unreachable until step A has happened, then a request for B before A cannot be
+correct — whatever the evidence in front of you appears to say — and it should
+be refused on structure alone, with no perception involved. This is worth
+stating separately because fixing the value looks like fixing the problem: the
+caller starts using the right mechanism and still asks for the wrong thing
+through it, and now does so with the confidence the mechanism lends.
+
+A refusal grounded in structure must still name the move that would be correct.
+Refusing without redirecting converts a wrong action into a stuck one.
+
+---
+
+## 21. Do not answer a question your evidence cannot settle
+
+There is a verdict between *pass* and *fail*, and reaching for it is a
+discipline rather than a weakness. If an action was genuinely performed but its
+outcome is established somewhere you have not looked yet, the honest record is
+**deferred**: it says what happened, says what did not, and names what would
+settle it.
+
+The temptation is a threshold. Some measurement correlates with success, so a
+line gets drawn through it, and from then on the tool answers with confidence
+in both directions. Before drawing that line, **measure both populations** —
+not just the failures you were chasing. The two may overlap, and if they do,
+no line exists at any position:
+
+- A successful outcome scoring *below* an unsuccessful one is not noise to be
+  tuned away. It is proof that the measure does not carry the signal.
+- "Nothing changed" is equally uninformative if an unchanged reading also
+  occurs when things are working.
+
+When the populations overlap, the answer is not a better threshold. It is that
+this measurement cannot answer this question, and the action must stop
+pretending to. Record the measurement anyway, for audit, and say plainly that
+it decided nothing.
+
+**A deferral that does not name its resolver is a shrug.** *"Outcome unknown"*
+leaves the reader exactly where they started. *"Outcome unknown — look at the
+next capture; this specific appearance means it failed"* is actionable, and the
+second half is load-bearing: telling someone to go and look, without telling
+them what they are looking for, is how a wrong action gets repeated.
+
+**Split the work by what each party can actually do.** If a human or a model
+reads the situation reliably but chooses badly, give it the reading and take
+the choosing away. A component that declines to answer a question it cannot
+answer, and says who can, is worth more than one that answers it most of the
+time — because the occasional wrong answer arrives wearing the same clothes as
+a right one.

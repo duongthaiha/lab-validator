@@ -1761,7 +1761,128 @@ screen that did not move at all records `BLOCKED` rather than a finding --
 keystrokes reaching nothing is a fact about the console, not evidence against
 the lab's credentials. Filing that as `LAB007 major` was the first draft, and it
 would have been §2.22's dead-pane finding all over again: a real observation,
-correctly made, attributed to the wrong thing.## 3. Recommended architecture
+correctly made, attributed to the wrong thing.
+#### The second run: right verb, wrong noun
+
+Binding the credential to the role fixed half of it. The next live run *did*
+call `signin:` -- and asked for `portal`, while looking at a Windows lock
+screen captioned `Admin` with a password box on it. The tool typed the cloud
+password into the machine, and recorded **PASS**.
+
+So the model was not failing to use the mechanism. It was failing at the
+judgement the mechanism had left with it. Its task said *"Sign in to Azure
+Portal"*, and prompt wording -- *"match the credential to the screen, not to
+the task"* -- was not enough to overcome that. This is principle 20's third
+rule arriving one level up: it was applied to *which credential*, and the same
+argument applies to *which login*.
+
+**The order is mechanically determinable, so it is not offered.** Every surface
+this action can reach -- browser, portal, terminal -- lives inside the VM. A
+cloud sign-in inside the VM's browser is unreachable until the machine is
+unlocked. So `signin:portal` before any `signin:vm` is a request that cannot be
+correct *whatever the screen shows*, and no screen-reading is needed to know
+it. It is refused, and the refusal names the move to make.
+
+That guard reads the trace rather than memory, so a run resumed with
+`auto --run` inherits it -- and it is deliberately satisfied only by
+`signin:vm`, not by any `signin:`. Today those are equivalent, because nothing
+else can reach the trace without a VM sign-in preceding it; but that argument
+is circular, holding only while the guard holds. A test seeds the trace
+directly to break the circle.
+
+#### The threshold that could not exist
+
+The verdict above -- *"the input landed, read the next capture"* -- still had a
+threshold in it: a screen that moved by more than 0.6 was treated as having
+received the keystrokes. Measuring the real frames killed it.
+
+| transition | delta | outcome |
+| --- | --- | --- |
+| lock screen -> *"The password is incorrect"* | **0.80** | **failed** |
+| lock screen -> *"Welcome"* | **0.23** | **succeeded** |
+| lock screen -> *"Welcome"* | **1.20** | **succeeded** |
+| consecutive identical frames | 0.00 | nothing happened |
+| whole-screen navigation | 198-199 | a real transition |
+
+**A success can score below a failure.** Both screens are the same flat blue
+with the same avatar and the same account name; the only difference is a line
+of text, and mean pixel difference cannot read text. The 0.80 row is the
+rejection this tool recorded as PASS.
+
+This is the *second* vision approach measured and rejected here, and the first
+one's lesson recurs exactly: the populations overlap, so no line separates
+them. What changed is the conclusion drawn from that. The first time, the
+response was to find another signal. This time there is no other signal
+available at this moment in time -- so the action stops answering the question.
+
+**It records `DEFERRED`, always.** Not `PASS`, which would be a guess; not
+`BLOCKED`, which would claim it failed; not a finding, which would blame the
+lab for something nobody observed. The delta is still measured and still
+written into the note, for audit -- but it decides nothing, and the note says
+so, then names what does: *capture the screen and read it; a password box or an
+error message means it failed*.
+
+That last clause is load-bearing, and a mutation proved it. Truncating the note
+to *"capture the screen."* left the test green, because the assertion was
+`"read it" in note or "capture the screen" in note`. An instruction to go and
+look, with no statement of what to look for, is how thirteen wrong passwords
+got typed in the first place.
+
+**The division of labour this settles.** The model reads screens well -- it
+transcribed *"The password is incorrect. Try again."* correctly on the very run
+that failed. What it cannot do is choose the credential or the order. So
+perception goes to the model, and binding and sequencing go to the code. A
+tool that refuses to answer a question it cannot answer, and says who can, is
+worth more than one that answers it 70% of the time.
+
+#### The verification tool convicted the fix
+
+The change above was made, tested and mutation-swept, and then
+`scripts/agent_smoke.py --drive` — this project's own procedure for verifying
+`auto` without a lab — went from a clean `OPEN → PERFORM → ADVANCE → STOP` to
+three stalls. Reproducibly, twice.
+
+The obvious conclusion was that the new prompt rules had broken it. Swapping in
+the committed `agent.py` and re-running confirmed it: committed walked, edited
+stalled. Two changes had gone in, so each was tried alone — **and both stalled
+independently.** That does not fit. They say different things; a misreading
+explanation would have picked one.
+
+So the next test was a *placebo*: five lines of deliberately bland text about
+note phrasing, mentioning no screen, verb or credential. **It stalled too.**
+
+`DEFAULT_MODEL = "auto"`. Copilot chooses the model, and that choice moves with
+the prompt. Pinning it settled the question in one run:
+
+| | committed prompt | edited prompt |
+| --- | --- | --- |
+| `auto` | walks | **stalls 3/3** |
+| `--model gpt-5.4` | walks | **walks** |
+
+**The wording was never the problem.** The smoke test was measuring the router.
+
+That makes it a wrong-answer generator of the exact shape this project keeps
+finding: it does not fail loudly or obviously, it returns a *plausible verdict
+about the wrong thing*, and it points at the change you just made — the most
+believable suspect in the room. The natural response is to revert a good fix.
+
+The fix is not to pin a model by default. `auto` is right for real runs and a
+pinned name eventually retires — that was already a defect once here, in 8G.
+The fix is that an **unpinned stall must name its own confound**: the tool now
+says a stall is *not yet* evidence against the change under test, and gives the
+command that settles it. It prints only on an unpinned stall, so it stays a
+warning rather than becoming furniture.
+
+The general rule, and it is not about models: **when a verification tool has a
+free variable, holding it constant is part of the procedure, not an
+optimisation.** A comparison with two things moving measures neither. And a
+tool whose result depends on something it does not report cannot be audited by
+the person reading the result — so it has to report it, or refuse to conclude.
+
+---
+
+## 3. Recommended architecture
+
 ### 3.1 The control-surface ladder
 
 Always take the highest rung that can answer the question. Every rung down costs an order of

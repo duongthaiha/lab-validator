@@ -144,10 +144,36 @@ instruction text asked for. Labs routinely document the cloud login and never
 mention the machine login the learner meets first; a model told about one
 family reaches for that family.
 
-`signin:` verifies against the **frame**, not the keystrokes, using the same
-`imaging.stability` measure as the quiet probe — mean pixel difference on a
-downscaled greyscale copy. Raw byte comparison would pass on caret blink and
-re-encoding noise alone, so every sign-in would record PASS whatever it typed.
+**The order is bound too.** `signin:portal` is refused until a `signin:vm` has
+run in this walk. Everything the agent can reach — browser, portal, terminal —
+is inside the VM, so a cloud sign-in is unreachable until the machine is
+unlocked, and the request cannot be correct whatever the screen shows. The
+guard reads the run's trace rather than memory, so `auto --run <folder>`
+inherits it. This exists because binding the credential fixed only half the
+problem: the next live run *did* call `signin:`, and asked for `portal` while
+looking at a Windows lock screen, because its task said "Sign in to Azure
+Portal".
+
+**A sign-in never records `PASS`.** It records `DEFERRED`, and that is not
+caution — it is the only honest verdict available. Measured on this lab's own
+frames:
+
+| transition | delta | outcome |
+| --- | --- | --- |
+| lock screen → *"The password is incorrect"* | 0.80 | **failed** |
+| lock screen → *"Welcome"* | 0.23 | **succeeded** |
+| lock screen → *"Welcome"* | 1.20 | **succeeded** |
+
+A success can score below a failure, because both screens are the same flat
+blue with the same avatar and the same account name and differ by a line of
+text. So the delta is measured and written into the note for audit, decides
+nothing, and the note names what does settle it: capture the screen and read
+it — a password box still showing, or an error message, means it failed.
+
+That division is deliberate. The model reads screens well; it transcribed *"The
+password is incorrect. Try again."* correctly on the run that got the
+credential wrong. What it cannot do is choose the credential or the order. So
+perception stays with the model and binding stays in code.
 
 It records only what it can prove. A screen that moved shows the input landed;
 it does **not** show the credential was accepted, because a rejection repaints
@@ -177,6 +203,7 @@ Every exit prints a sentence. Match its opening words here.
 | `all N selected sections are accounted for ... Separately, M were not selected` | a scoped walk finished its scope | expected; the report says `**Scoped run.**` and can never answer YES. Widen with `lab-validator scope --run <folder> --sections ...` and re-run `auto --run <folder>` |
 | `The lab has closed.` | the lab instance ended while the walk was still running | **not a tool failure and not a lab defect.** Sections already walked keep their reports; the rest are **unknown, not correct**. Launch the lab again and resume with `auto --run <folder>` |
 | `signin:<role> refused: ...` | the vault could not bind that login to exactly one credential pair | **not a guess to fix by retrying.** The message names what it found: no credential for that role, two that match, or half a pair. Check the Resources tab in `credentials.json`; if the lab genuinely issues an ambiguous scope, that is a finding about the lab |
+| `signin:<role> refused: these keystrokes go to the VM ...` | a cloud sign-in was requested before the VM was unlocked | **expected, and not a failure.** Nothing was typed. The agent should call `signin:vm` first; if it keeps asking for the portal, the screen it is looking at is a Windows lock screen and its task text is misleading it |
 
 A **single** slow turn is not a stop. It prints `(that turn outlasted its Ns
 budget - timeout 1/2; anything it recorded is kept)` and the walk carries on:
@@ -337,6 +364,16 @@ one real model turn, one recorded finding.
 ```powershell
 python scripts/agent_smoke.py --drive
 ```
+
+> **Hold the model constant when you are comparing.** `--drive` defaults to
+> `auto`, so Copilot picks the model, and the pick moves with the prompt.
+> Adding five lines of *unrelated* text to the Rules block was measured
+> flipping this fixture from a clean walk to three stalls; the same edit under
+> a pinned model walked cleanly both ways. So after editing the prompt, run
+> `--drive --model <name>` on your version *and* on the one you started from
+> before concluding anything. An unpinned stall prints a note saying exactly
+> this, because the natural reading — "my change broke it" — is wrong often
+> enough to cost an afternoon.
 
 Run it after any change to the SDK half of `agent.py`, and after any SDK
 upgrade.

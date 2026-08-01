@@ -365,6 +365,17 @@ Rules:
   reported as broken. A task called "Sign in to Azure Portal" can still be
   sitting behind a Windows sign-in that wants the machine account: read the
   screen first, and say what you see before you type.
+- The machine sign-in always comes first. Everything you can reach -- browser,
+  portal, terminal -- is inside the VM, so until the VM is unlocked there is
+  nothing else to sign in to. signin:portal is refused before signin:vm has
+  run, and the refusal is not something to work around by typing the password
+  another way.
+- A sign-in never reports success. It records DEFERRED, because the screen
+  cannot be measured for it: a rejected sign-in and an accepted one look almost
+  identical on a Windows console -- same blue, same avatar, same account name,
+  one line of text apart. So capture the screen afterwards and read it. A
+  password box still showing, or "The password is incorrect", means it failed;
+  say so and try the other login rather than repeating the same one.
 - A screen the instructions never mention is itself worth recording. Get past
   it if the Resources tab gives you what it needs, and record the omission
   against the task it blocked.
@@ -675,7 +686,11 @@ class ActP(BaseModel):
         description=(
             "lab actions in order: click:X,Y  dblclick:X,Y  move:X,Y  focus  "
             "type:TEXT  signin:vm  signin:portal  cred:SCOPE/LABEL  key:Control+s  "
-            "wait:MS  until:connected  shot  dialog  read  page:N"
+            "wait:MS  until:connected  shot  dialog  read  page:N. "
+            "signin:vm unlocks the Windows desktop and must come before any "
+            "signin:portal, which is refused until it has. A sign-in records "
+            "DEFERRED, never PASS -- take a shot afterwards and read whether it "
+            "was accepted."
         )
     )
     label: str = Field(default="", description="filename label for captures")

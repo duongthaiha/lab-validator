@@ -263,6 +263,27 @@ resolves the credential from the lab's own scopes; if two could match, it
 refuses and names them — supply the role it could not work out, never a
 credential.
 
+**The VM login always comes first.** Everything you can reach — browser,
+portal, terminal — is inside the VM, so `signin:portal` is refused until
+`signin:vm` has run. Nothing is typed by a refused sign-in. Do not work around
+it by typing the password another way; go and unlock the machine.
+
+**A sign-in reports `DEFERRED`, never `PASS` — so read the screen afterwards.**
+Not caution: on a Windows console an accepted sign-in and a rejected one are
+the same flat blue with the same avatar and the same account name, differing by
+one line of text, and the accepted one can measure as *less* changed than the
+rejected one. So always follow a sign-in with a capture, and say what you see:
+
+```powershell
+lab-validator step --segment s04 --label vm-signin `
+  --do signin:vm --do until:quiet:4000 --do shot
+```
+
+A password box still showing, or "The password is incorrect", means it failed.
+Say so, and try the other login — do not repeat the same one. Treating the
+`DEFERRED` as a pass and moving on is how four steps of work get recorded
+against a screen nobody ever got past.
+
 Guessing here is not a harmless retry. The wrong password produces "the
 password is incorrect", which is indistinguishable from a genuine credential
 defect, so a guess does not just fail — it manufactures a false finding about

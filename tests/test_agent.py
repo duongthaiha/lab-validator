@@ -968,3 +968,55 @@ def _first_move(run, outline):
     run.step("s01", action="read", note="scrolled", surface="labui",
              capability="scroll_instructions")
     return next_move(run, outline)
+
+
+# --- the verification tool must not mislead the person verifying -------------
+#
+# `agent_smoke.py --drive` defaults to `auto`, and Copilot's routing moves with
+# the prompt. Adding five lines of *deliberately irrelevant* text to the Rules
+# block was measured flipping the fixture from a clean walk to three stalls,
+# while the same edit under a pinned model walked cleanly both ways. Anyone
+# editing the prompt therefore sees their good change "fail" its own smoke
+# test. The tool must say so rather than let them revert it.
+
+SMOKE = Path(__file__).resolve().parents[1] / "scripts" / "agent_smoke.py"
+
+
+def test_an_unpinned_stall_names_the_routing_confound():
+    """The caveat exists, and says the three things it has to say."""
+    body = SMOKE.read_text(encoding="utf-8")
+    assert "CONFOUND" in body, "agent_smoke must carry the caveat at all"
+    start = body.index("CONFOUND = ")
+    note = body[start : body.index('"""', body.index('"""', start) + 3)]
+
+    assert "auto" in note, "it must name what chose the model"
+    assert "not yet evidence" in note.lower(), (
+        "it must say a stall does not convict the change under test"
+    )
+    assert "--model" in note, "it must give the re-run that settles it"
+
+
+def test_the_caveat_is_only_printed_when_it_applies():
+    """Printed on an unpinned stall, and not otherwise.
+
+    Two ways to make this guidance useless: never show it, or show it after
+    every run so it becomes furniture. Both halves are asserted because the
+    obvious mutation -- drop the `not args.model` -- leaves the first half
+    green.
+    """
+    body = SMOKE.read_text(encoding="utf-8")
+    (guard,) = [ln for ln in body.splitlines() if "CONFOUND" in ln and "print" in ln]
+    condition = body.splitlines()[body.splitlines().index(guard) - 1]
+    assert "not args.model" in condition, "a pinned run has no confound to warn about"
+    assert "STALLED" in condition, "a clean run must not be warned at"
+
+
+def test_the_smoke_forces_utf8_both_ways():
+    """2.19's defect, which cost a whole run: the child was set to UTF-8 and
+    decoded with the parent's locale codec, so an em-dash emptied the stream
+    silently. Setting one without the other is worse than setting neither.
+    """
+    body = SMOKE.read_text(encoding="utf-8")
+    assert "PYTHONIOENCODING" in body and '"utf-8"' in body
+    assert 'encoding="utf-8"' in body, "the parent must decode as UTF-8 too"
+    assert 'errors="replace"' in body, "a stray byte must not kill the reader"
