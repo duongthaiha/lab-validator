@@ -358,6 +358,44 @@ lab-validator run --retract <seq> --note "Re-checked on a fresh instance; the me
 
 ---
 
+## If you are told the screen is not changing
+
+You will sometimes see this after a capture:
+
+```
+NOTHING YOU HAVE DONE IN THE LAST 3 CAPTURES HAS CHANGED THE SCREEN. 5 input
+action(s) were sent (key:ctrl+l, type:https://portal.azure.com, key:Return, ...)
+and every time the screen stayed within its own idle noise.
+```
+
+**Stop and look at the most recent screenshot before doing anything else.** Do
+not repeat the action, do not try the same thing at different coordinates, and
+do not send more keys. This is the moment to spend a `shot` on looking rather
+than on trying.
+
+The likely reasons, in the order they have actually occurred:
+
+1. **You are acting on the wrong surface.** The commonest by far. You are typing
+   a URL, but there is no browser window open — just a desktop. Open the
+   application first, from the taskbar or the Start menu.
+2. **Nothing has focus**, or the wrong control does. Click the target, then type.
+3. **Your coordinates are landing on empty space** — wallpaper, a margin, a gap
+   between controls. A click on bare desktop changes nothing, and correctly
+   reports success.
+4. **The console is genuinely not repainting.** Real, but the rarest, and it
+   looks identical to the other three from the number alone.
+
+**This is not a lab defect. Do not record a finding for it.** A screen that will
+not move is a fact about the harness or about what you are doing, not about the
+lab's instructions. Filing it as one blames the lab for your own aim.
+
+The measurement cannot tell you which of the four it is — that is why you are
+being sent to the screenshot instead of being given an answer. A previous
+version of this warning did name a cause, chose "the console has frozen", and
+was wrong: the screenshot showed a healthy desktop with a working clock.
+
+---
+
 ## If the lab closes while you are walking it
 
 A Skillable lab that ends **keeps its tab, its title, its `/LabClient/<guid>`

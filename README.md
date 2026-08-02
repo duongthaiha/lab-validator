@@ -79,6 +79,18 @@ Skillable lab that has ended keeps its tab, title and URL, so nothing else would
 have noticed. Relaunch the lab and resume the same run with
 `lab-validator auto --run runs/<timestamp>`.
 
+**If nothing seems to be happening**, ask:
+
+```powershell
+lab-validator debug --run runs/<timestamp> --stuck
+```
+
+That lists every action that changed nothing on screen, so
+`26 of 33 input intervals changed nothing` is a fact rather than an
+impression. It works on runs recorded before this feature existed, because it
+measures the screenshots already on disk. See
+[Reading a run back](#reading-a-run-back--why-nothing-is-happening).
+
 **What of this is proven.** Steps 1–3 and the resolution of that URL were run
 against the live tenant on 2026-07-31. `auto` walking a section to completion
 has not yet been observed end to end — the one run that got that far ended when
@@ -523,6 +535,71 @@ findings rendered with no name at all while nothing failed.
 `--retract` matters as much as the rest: run 003 withdrew 6 of 36 findings. A
 validator that never withdraws anything is not checking itself.
 
+## Reading a run back — "why is nothing happening?"
+
+A live walk once did **sixty-five actions against a Windows desktop with no
+browser open** and was told `PASS` every single time. It typed
+`https://portal.azure.com`, pressed `ctrl+l`, `/` and `g`, and clicked at
+(500,60), (700,72) and (640,50) — all into bare wallpaper. Every action was
+genuinely dispatched, so every action was genuinely a success, and not one of
+them was *the screen changed*.
+
+Every capture now measures what the actions before it did to the screen:
+
+```powershell
+lab-validator debug --run runs/2026-08-02T0025Z --stuck --tail 6
+```
+
+```
+capture                                     delta  effect     actions
+0053-s00-create-microsoft-type-after-cli    0.000  NO CHANGE  type:Microsoft Foundry, wait:2000, shot
+0054-s00-create-microsoft-ai-azure-shot     0.005  NO CHANGE  page:1, focus, key:ctrl+l, type:https://ai.azure.com/, ...
+0056-s00-create-microsoft-look              0.000  NO CHANGE  page:0, wait:2000, click:840,400, wait:3000, dialog, shot
+
+26 of 33 input intervals changed nothing on screen.
+```
+
+| flag | what it does |
+| --- | --- |
+| `--stuck` | only the actions that changed nothing — the shape of a stuck walk |
+| `--tail N` | only the last N captures; the usual question is *what was it doing when it stopped* |
+| `--out FILE` | also write the report to a file |
+
+**It works on runs recorded before any of this existed**, by measuring the
+images already on disk. That is deliberate: the run you need to explain is
+always one that already happened, and asking someone to re-run it with a flag
+on is asking them to reproduce a thing they could not explain in the first
+place. For the same reason `debug.jsonl` is written **always**, not on request —
+you never know in advance which run will be the one that goes wrong. `--debug`
+on `step` only controls what is *printed* as it happens.
+
+Live, the agent is told the same thing. After three captures where input went in
+and nothing came back, the tool says so and tells it to look at the screen
+before doing anything else.
+
+**What it will not tell you is why.** The first version of this feature measured
+that run, found twenty-four byte-identical frames, and concluded the console had
+frozen — with a stop, and a message telling the user to reconnect the lab. Then
+somebody opened the last screenshot: a healthy Windows desktop with the clock
+reading 5:39 PM. The numbers were all correct and the story built on them was
+invented. So the report lists the candidate causes and picks none of them, and
+it ends by telling you to go and look at the frame. A still screen is a fact
+about the harness or about the walk — **it is never recorded as a lab defect.**
+
+Scale, on the one console measured, so a number means something:
+
+| transition | delta |
+| --- | --- |
+| click on empty wallpaper | 0.0 |
+| clock digit / caret blink | 0.002–0.005 |
+| `Tab` moving a desktop focus ring | 0.28 |
+| typing into a lock screen | 0.52 |
+| lock screen giving way to the desktop | 94.75 |
+
+Which is why nothing is compared against a constant: a run measures its own idle
+noise from the intervals where nothing was sent, and judges an action against
+that.
+
 ## Adding another lab
 
 Everything lab-specific is data in `targets/<slug>.toml` — ids, expected
@@ -630,6 +707,8 @@ src/lab_validator/learnerpath.py    which learner controls a run never exercised
 src/lab_validator/targets.py        target descriptor loader and validator
 src/lab_validator/discovery.py      enrolment parsing, URL→lab resolution, scaffolding
 src/lab_validator/imaging.py        screenshot capture, downscaled view copies
+src/lab_validator/console.py        what each action did to the screen; the debug log
+src/lab_validator/debugread.py      read a finished run back and explain it
 src/lab_validator/browser.py        CDP launch/attach, profile management
 src/lab_validator/labclient.py      lab frames, window.api.v1, VM screen/click/type
 src/lab_validator/config.py         typed settings, SecretStr-backed

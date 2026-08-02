@@ -306,6 +306,7 @@ runs/<timestamp>/gap-analysis.md      roll-up, links to every section report
 runs/<timestamp>/sections/<id>.md     one report per section
 runs/<timestamp>/images/              numbered evidence
 runs/<timestamp>/trace.jsonl          append-only, one record per step
+runs/<timestamp>/debug.jsonl          what each action did to the screen
 ```
 
 Read the coverage table before the findings. A section with no findings may not
@@ -316,6 +317,34 @@ The learner-path ledger is worth a second look on an agent-driven run. Where the
 walk acted by a faster route than a learner has, the report says which controls
 were never exercised, so "the button works" stays a claim with evidence behind
 it rather than an assumption.
+
+`debug.jsonl` is deliberately **not** part of the trace. The trace is what the
+report is built from and what a human is asked to believe; padding it with
+per-action pixel deltas would make the evidence harder to read in order to make
+debugging easier. Read it with `lab-validator debug --run <folder>`, which also
+works on runs recorded before the file existed, by measuring the images on disk.
+
+### When the walk is doing things and nothing is happening
+
+The one to know about, because it looks like progress. A live run recorded
+`PASS` on step after step while typing URLs at a Windows desktop with no browser
+open. Every action was dispatched, so every action succeeded; none of them was
+*the screen changed*.
+
+After three captures where input went in and nothing came back, the tool now
+tells the model exactly that, names the actions that achieved nothing, and sends
+it to look at the screen. It also lists what a still screen can mean — wrong
+surface, wrong focus, wrong coordinates, dead console — and **picks none of
+them**, because from a delta alone they are indistinguishable. The first version
+of this feature did pick one, said the console had frozen, and was wrong.
+
+It is an observation, never a verdict: the walk is not stopped and no finding is
+recorded. A screen that will not move is a fact about the harness or about the
+walk, not about the lab's instructions.
+
+```powershell
+lab-validator debug --run runs/<timestamp> --stuck    # only the ineffective actions
+```
 
 ## Changing it
 

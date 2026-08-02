@@ -1879,6 +1879,104 @@ optimisation.** A comparison with two things moving measures neither. And a
 tool whose result depends on something it does not report cannot be audited by
 the person reading the result — so it has to report it, or refuse to conclude.
 
+### 2.24 The diagnostic that nearly invented its own defect
+
+The report was four words: *"the next few steps don't seem to move anything."*
+The trace disagreed — 77 steps, every one `PASS`. Both were right, and the gap
+between them is the whole lesson.
+
+**Every VM action passed because none of them was ever checked.** `click`,
+`type`, `key`, `scroll` all recorded a step with no verdict, which defaults to
+PASS. The verdict meant *the action was dispatched*, and it was read as *the
+action worked*. Nothing in the trace could distinguish a click that opened a
+menu from a click on empty wallpaper, because nothing looked at the screen
+afterwards.
+
+So each capture now measures what changed since the last one, and I measured
+the failing run to find out what the numbers meant.
+
+**Twenty-four consecutive intervals, byte-identical.** Not similar — identical.
+That is not a subtle reading, and the conclusion looked forced: a live Windows
+console has a blinking caret and a clock with a minute hand, so pixel-identical
+frames mean nothing is being drawn, which means the remote session has dropped.
+I wrote a `frozen` property, a stop, a message telling the user to reconnect the
+lab, and a docstring explaining the reasoning as established fact.
+
+Then I replayed it at full precision, because `0.00` in a formatted table is
+rounding and I wanted to be sure. **Twenty-four intervals were exactly zero, and
+eleven more were 0.0014–0.0048 — interleaved, not before or after.** Two more
+measured 0.28 on a `Tab` press. Something *was* repainting; input *was* landing.
+The premise was gone.
+
+I opened the last screenshot. **A healthy Windows desktop, taskbar clock reading
+5:39 PM.** The sign-in had worked perfectly.
+
+Every number now explained itself, and none of them was pathology:
+
+| observation | actual cause |
+| --- | --- |
+| 0.0 across many intervals | clicking **bare wallpaper** |
+| 0.002–0.005 | the **clock ticking**, and the caret blinking |
+| 0.28, twice | `Tab` moving a **desktop icon focus ring** |
+| 94.75, once | the lock screen giving way to the desktop |
+
+The real defect was in the frame all along: the agent had spent sixty-five
+actions typing `https://portal.azure.com`, pressing `ctrl+l`, `/` and `g`, and
+clicking at (500,60), (700,72) and (640,50) — **at a desktop with no browser
+window open.** It was not stuck because the console was dead. It was stuck
+because it was aiming at an application that had never been started.
+
+**I had come within one commit of shipping a tool that would have told the user,
+with total confidence, to reconnect a session that was in perfect health** —
+while the actual fault went unnamed. A correct measurement, attributed to the
+wrong cause, published as a verdict. That is precisely the failure this whole
+project exists to catch, committed by the instrument built to catch it, in the
+same week it was built.
+
+**The rewrite: the module reports and refuses to conclude.** No `frozen`, no
+stop, no cause. It states the measurement, enumerates four candidate causes —
+wrong surface, wrong focus, wrong coordinates, dead console — chooses **none**,
+and sends the reader to the screenshot. It says outright that this is *not* a
+lab defect and no finding should be recorded for it, because an observation that
+could be mistaken for a defect must refuse the mistake in the same breath. The
+generalisation is judgement principle 22: *a measurement plus a plausible cause
+is not a diagnosis.* The docstring now records the refuted thesis, because a
+module that refuses to conclude looks over-cautious until you know what it cost.
+
+It would have fired at interval 6 rather than 31 — about sixty wasted actions.
+
+**Three traps found while building the guards, each of which made a check look
+like it worked.**
+
+*A threshold cannot be a constant here.* The idle floor is the **median** of the
+intervals where nothing was sent — not the maximum, because the 94.75 settle
+would otherwise become the bar and declare every subsequent action ineffective.
+Each run measures its own noise, so there is no magic number to be wrong about
+on someone else's console.
+
+*Comparing a raw PNG against a saved JPEG measures the encoder, not the screen.*
+Each `step` is a fresh process, so a resumed watch seeds its baseline from the
+last saved JPEG while the first live comparison used the in-memory PNG. On a
+real console that difference alone is ~0.02, above the floor — so **every
+interval would have reported movement and the warning could never have fired
+live.** The feature would have passed its tests, looked healthy, and been useless
+in exactly the case it was built for. Caught by noticing that the live log and
+an offline replay of *the same intervals* disagreed.
+
+*A test fixture of flat colour survives JPEG compression exactly* — delta 0.000
+— so the guard for the above passed no matter what. Making the fixture textured
+(measured: 3.383 against 0.000) turned a vacuous test into a real one. **A guard
+whose fixture is too simple to exhibit the defect is not a guard.** Nor could
+a single-process test have caught a cross-process bug: that one had to span
+capture → resume → capture.
+
+**And the fix was verified against the live lab by accident.** The user's `auto`
+was still running, picked up the edit mid-run (editable install, fresh process
+per step), and wrote entries either side of it. The four intervals recorded
+before the fix disagree with an offline replay; the seven after agree to six
+decimal places, including 63.2420 and 39.0672 — a natural experiment nobody had
+to construct.
+
 ---
 
 ## 3. Recommended architecture

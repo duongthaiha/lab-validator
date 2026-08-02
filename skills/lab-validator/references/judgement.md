@@ -463,3 +463,52 @@ the choosing away. A component that declines to answer a question it cannot
 answer, and says who can, is worth more than one that answers it most of the
 time — because the occasional wrong answer arrives wearing the same clothes as
 a right one.
+
+## 22. A measurement plus a plausible cause is not a diagnosis
+
+Measuring something and explaining it are two different acts, and the second is
+much easier to get wrong than the first. The measurement has a method behind
+it. The explanation usually has nothing behind it but the first cause that came
+to mind, which then hardens into fact the moment it is written down.
+
+A diagnostic once measured that a screen had not changed across twenty-four
+consecutive captures: byte-identical frames, no rounding, correct. From that it
+concluded the remote console had frozen, and told the operator to reconnect. The
+reasoning felt airtight — a live desktop has a blinking caret and a ticking
+clock, so identical pixels cannot be a subtle reading.
+
+The screenshot showed a healthy desktop with the clock plainly working. The
+frames were identical because the agent was clicking bare wallpaper. Every
+number was right. The story was invented.
+
+Read what that would have cost: an operator told to reconnect a session that
+was fine, restarting work that did not need restarting, while the real fault —
+sixty-five actions aimed at an application that was never opened — went on
+untouched and unnamed.
+
+**So separate the two, and be explicit about which you are publishing.**
+
+- Report the measurement, in full, with the units and the baseline it was
+  judged against.
+- Enumerate the candidate causes — plural. If you can only think of one, you
+  have not finished thinking.
+- Choose none of them, and say plainly that you are not choosing.
+- Name the observation that would separate them, and send the reader there.
+
+The test for whether you have a diagnosis is not *does my explanation fit the
+data*. A wrong explanation fits the data too; that is why it occurred to you.
+The test is *what else would fit this data equally well, and what would tell
+them apart* — and if the answer is "I would have to go and look", then looking
+is the finding, and everything before it is a measurement.
+
+Two corollaries, both paid for:
+
+**A confident cause travels further than the number it came from.** Once
+"the console froze" is in a message, nobody re-derives it; they act on it. The
+measurement gets quoted as support for a claim it never made.
+
+**State loudly when an observation is not a defect in the thing under test.** A
+still screen is a fact about the harness, or about where the agent aimed — not
+about the material being validated. An observation that could be read as a
+defect, and is not one, has to say so in the same breath, or somebody will file
+it.

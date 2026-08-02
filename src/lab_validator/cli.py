@@ -51,6 +51,7 @@ BUILTINS = {
     "auto": "walk the whole lab with an agent (the human only signs in)",
     "scope": "review what was captured and choose which sections to walk",
     "next": "what the walk loop says to do now, and why",
+    "debug": "read a finished run back and see what each action did to the screen",
     "install-skill": "copy skills/lab-validator into ~/.copilot/skills",
 }
 
@@ -535,6 +536,33 @@ def _open_run(args):
         return None, 2
 
 
+def cmd_debug(args) -> int:
+    """Read a finished run back and say what each action did to the screen.
+
+    Works on runs recorded before any of this existed, by measuring the images
+    on disk. That is the whole point: the run you want to explain is always one
+    that already happened, and asking somebody to re-run it with a flag on is
+    asking them to reproduce a thing they could not explain in the first place.
+    """
+    from .debugread import report
+
+    run, code = _open_run(args)
+    if run is None:
+        return code
+    moved = False if args.stuck else None
+    try:
+        text = report(run.dir, tail=args.tail, moved=moved)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(text)
+    if args.out:
+        out = Path(args.out)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"\nwritten to {out}")
+    return 0
+
+
 def cmd_scope(args) -> int:
     """Review what a run captured, and choose what is worth walking.
 
@@ -730,6 +758,18 @@ def main() -> int:
         n.add_argument("--minutes", type=int,
                        help="lab minutes remaining, so the loop can reserve write-up time")
         return cmd_next(n.parse_args(args.rest))
+
+    if args.command == "debug":
+        d = argparse.ArgumentParser(prog="lab-validator debug")
+        d.add_argument("--run", help="run folder (default: the most recent)")
+        d.add_argument("--runs", help="runs root (default: ./runs)")
+        d.add_argument("--tail", type=int, default=0,
+                       help="show only the last N captures (a long run answers "
+                            "'what was it doing when it stopped' badly in full)")
+        d.add_argument("--stuck", action="store_true",
+                       help="show only the actions that changed nothing on screen")
+        d.add_argument("--out", help="also write the report to this file")
+        return cmd_debug(d.parse_args(args.rest))
 
     if args.command == "install-skill":
         s = argparse.ArgumentParser(prog="lab-validator install-skill")

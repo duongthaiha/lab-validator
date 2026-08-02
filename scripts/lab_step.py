@@ -36,6 +36,10 @@ from lab_validator.browser import (  # noqa: E402
     BrowserError,
     attached_context,
 )
+from lab_validator.console import (  # noqa: E402
+    ConsoleWatch,
+    DebugLog,
+)
 from lab_validator.imaging import (  # noqa: E402
     QUIET_THRESHOLD,
     save_evidence,
@@ -114,16 +118,43 @@ class Stop(Exception):
     """Raised to abandon the remaining actions in a step."""
 
 
-async def capture(lab: LabClient, run: Run, segment: str, label: str) -> Path:
+async def capture(
+    lab: LabClient, run: Run, segment: str, label: str,
+    watch: ConsoleWatch | None = None, log: DebugLog | None = None,
+) -> Path:
     """Capture the VM screen as evidence, plus a reader-sized copy.
 
     Evidence frames must stay legible enough to read a portal label or a
     traceback; the agent's reader has a much smaller size limit than that
     requires. Writing both keeps each fit for purpose.
+
+    This is also where the console is measured, because it is the one place
+    every image the walk writes passes through -- so the whole run gets watched
+    without a single extra screenshot being taken.
     """
     png = await lab.screen_bytes()
     out = save_evidence(png, run.next_image(segment, label))
     save_view(png, out)
+    if watch is not None:
+        # The *saved* frame, not the raw one. A watch that resumes reads its
+        # baseline back from disk, where the frame is a JPEG; comparing that
+        # against a lossless PNG measures the difference between two encoders
+        # rather than the difference between two moments. Live, that scored
+        # every interval at ~0.02 against a 0.01 floor -- so everything "moved",
+        # nothing was ever reported as ineffective, and the whole diagnostic
+        # would have sat there looking healthy and saying nothing.
+        interval = watch.saw(out.read_bytes(), label=out.stem)
+        if interval is not None and log is not None:
+            log.write(
+                "interval",
+                delta=round(interval.delta, 6),
+                actions=list(interval.actions),
+                label=interval.label,
+                floor=round(interval.floor, 6),
+                moved=interval.moved,
+                image=out.name,
+                segment=segment,
+            )
     return out
 
 
@@ -359,6 +390,7 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
 async def run_actions(
     lab: LabClient, run: Run, segment: str, label: str, actions: list[str],
     ledger: Ledger | None = None,
+    watch: ConsoleWatch | None = None, log: DebugLog | None = None,
 ) -> int:
     findings = 0
     # Which channels this step used, so the run can state what it did *not*
@@ -369,6 +401,11 @@ async def run_actions(
         verb, _, arg = raw.partition(":")
         verb = verb.strip().lower()
         ledger.record_action(verb)
+        if watch is not None:
+            # Banked against the next frame, whenever that arrives. An action
+            # is credited to the interval it happened in, not to the one whose
+            # capture it happens to precede.
+            watch.did(raw)
 
         if verb in ("click", "dblclick", "move"):
             x, y = (int(v) for v in arg.split(","))
@@ -436,7 +473,7 @@ async def run_actions(
                     note=f"settled after {elapsed:.0f}s",
                 )
             else:
-                shot = await capture(lab, run, segment, f"{label}-timeout")
+                shot = await capture(lab, run, segment, f"{label}-timeout", watch, log)
                 findings += 1
                 run.step(
                     segment,
@@ -487,9 +524,13 @@ async def run_actions(
                          note=scrolled.describe())
 
         elif verb == "shot":
-            shot = await capture(lab, run, segment, arg or label)
+            shot = await capture(lab, run, segment, arg or label, watch, log)
             run.step(segment, action="shot", surface="vm", images=[shot])
             print(f"  -> {shot.relative_to(run.dir)}")
+            if watch is not None and watch.intervals:
+                last = watch.intervals[-1]
+                if log is not None and log.verbose:
+                    print(f"     {last.describe()}")
 
         else:
             raise Stop(f"unknown action {raw!r}\n\n{HELP}")
@@ -545,9 +586,24 @@ async def main_async(args) -> int:
             # aborting mid-way -- a walk that dies is exactly the one whose
             # coverage claim needs to be honest.
             ledger = Ledger.load(run.dir)
+            # Always on, and read back from disk rather than held in memory:
+            # every `step` is its own process, so a watch that did not resume
+            # would forget the run between commands and could never see a stall
+            # spanning two of them -- which is every stall that matters.
+            #
+            # Not opt-in, for the same reason the run folder is not opt-in. You
+            # never know in advance which run will be the one that goes wrong,
+            # and a diagnostic switched on afterwards has nothing to say about
+            # what already happened. `--debug` controls what is *printed*, not
+            # what is recorded.
+            log = DebugLog(run.dir)
+            log.verbose = bool(getattr(args, "debug", False))
+            watch = ConsoleWatch.resume(run.dir)
+            log.write("step", segment=args.segment, label=args.label, actions=list(args.do or []))
             try:
                 findings = await run_actions(
-                    lab, run, args.segment, args.label, args.do or [], ledger
+                    lab, run, args.segment, args.label, args.do or [], ledger,
+                    watch, log,
                 )
             except LabClosed as exc:
                 # The lab ended *during* the step. Everything recorded before
@@ -578,6 +634,16 @@ async def main_async(args) -> int:
             where = f"  -> {report.relative_to(run.dir)}" if report else ""
             print(f"run: {run.dir.name}  segment: {args.segment}  "
                   f"findings this step: {findings}{where}")
+
+            # Last, so it is the thing a reader -- human or model -- sees most
+            # recently. The whole reason this exists is that a walk once did
+            # sixty-five actions against a desktop with no browser open and was
+            # told PASS every time; being told so on the third action is the
+            # difference between a typo and a wasted run.
+            notice = watch.notice()
+            if notice:
+                log.write("notice", segment=args.segment, text=notice)
+                print("\n" + notice)
             return 0
         finally:
             await browser.close()
@@ -647,6 +713,8 @@ def main() -> int:
     p.add_argument("--label", default="step", help="filename label for captures")
     p.add_argument("--do", action="append", metavar="ACTION", help="action; repeat, order kept")
     p.add_argument("--run", help="run folder (default: most recent under runs/)")
+    p.add_argument("--debug", action="store_true",
+                   help="print what each action did to the screen (always logged to debug.jsonl)")
     p.add_argument("--start-segment", action="store_true", help="mark the segment started")
     p.add_argument("--end-segment", metavar="STATUS", help="mark the segment done/blocked/skipped")
     p.add_argument("--note", help="record an observation as its own trace record")
