@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,11 @@ def test_install_skill_is_also_implemented_locally():
     assert callable(cli.cmd_install_skill)
 
 
+def test_package_skill_is_also_implemented_locally():
+    assert "package-skill" not in cli.COMMANDS
+    assert callable(cli.cmd_package_skill)
+
+
 def test_the_help_advertises_the_locally_implemented_commands():
     """They are not in COMMANDS, so nothing else would notice them going
     missing from the epilog."""
@@ -68,7 +74,7 @@ def test_the_help_advertises_the_locally_implemented_commands():
     finally:
         sys.argv = saved
     text = buf.getvalue()
-    assert "walk" in text and "install-skill" in text
+    assert "walk" in text and "install-skill" in text and "package-skill" in text
 
 
 def test_installing_the_skill_writes_every_file(tmp_path):
@@ -83,6 +89,46 @@ def test_a_dry_run_writes_nothing(tmp_path):
     args = type("N", (), {"into": str(tmp_path), "dry_run": True})()
     assert cli.cmd_install_skill(args) == 0
     assert not list(tmp_path.rglob("*.md")), "a dry run must not touch the filesystem"
+
+
+def test_packaging_the_skill_writes_one_portable_archive(tmp_path):
+    output = tmp_path / "lab-validator.skill"
+    args = type("N", (), {"out": str(output)})()
+
+    assert cli.cmd_package_skill(args) == 0
+
+    source = cli.ROOT / "skills" / "lab-validator"
+    expected = sorted(
+        f"lab-validator/{path.relative_to(source).as_posix()}"
+        for path in source.rglob("*")
+        if path.is_file()
+    )
+    with zipfile.ZipFile(output) as archive:
+        assert sorted(archive.namelist()) == expected
+        assert "lab-validator/SKILL.md" in archive.namelist()
+        assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist())
+
+
+def test_skill_package_is_reproducible(tmp_path):
+    first = tmp_path / "first.skill"
+    second = tmp_path / "second.skill"
+
+    assert cli.cmd_package_skill(type("N", (), {"out": str(first)})()) == 0
+    assert cli.cmd_package_skill(type("N", (), {"out": str(second)})()) == 0
+    assert first.read_bytes() == second.read_bytes()
+
+
+def test_skill_package_validation_rejects_a_missing_reference(tmp_path):
+    source = tmp_path / "demo"
+    source.mkdir()
+    (source / "SKILL.md").write_text(
+        "---\nname: demo\ndescription: demo skill\n---\n"
+        "Read references/missing.md before acting.\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="references/missing.md"):
+        cli._skill_source_files(source)
 
 
 def test_the_scripts_directory_is_found_relative_to_the_package():

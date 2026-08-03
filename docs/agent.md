@@ -37,6 +37,38 @@ still produces a confident report.
 
 **A mechanical move cannot be skipped, because nothing is asked about it.**
 
+### Where the skill enters
+
+`auto` creates a Copilot SDK session and passes the repository's
+`skills/lab-validator` directory in `skill_directories`. The skill contributes
+the learner-path operating rules, evidence standards, taxonomy, and ownership
+judgement used during a model turn. It does not implement the controller.
+
+This repository-local loading path is separate from
+`lab-validator install-skill`, which copies the same files into the user's
+Copilot skills directory for direct natural-language invocation. An installed
+copy is not required for `auto`, and `auto` does not read it. Keeping the
+repository copy authoritative means the agent code, skill instructions, and
+tests are reviewed together.
+
+The resulting call chain is:
+
+```text
+lab-validator auto
+  -> cli.cmd_auto
+  -> agent.walk_autonomously
+  -> walkloop.next_move
+  -> mechanical move, or one skill-guided model turn
+  -> CLI-backed tool writes evidence
+  -> fingerprint persisted run state
+  -> walkloop.next_move
+```
+
+The model can follow the skill only through the tools registered for that
+session. Python hooks reject every other tool, and the controller independently
+checks the run folder after the turn. Instructions shape judgement; code
+enforces capability and progress.
+
 Three consequences follow, and they are the three things most worth
 understanding before you read a report `auto` produced.
 

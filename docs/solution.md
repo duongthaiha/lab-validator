@@ -1,0 +1,241 @@
+# How Lab Validator works
+
+Lab Validator walks a Microsoft Learning Campus / Skillable lab as a learner,
+records what actually happens, and compares that evidence with the written
+instructions. Its output is an evidence-backed gap analysis, not just a test
+result.
+
+For operating the tool, see the [CLI reference](cli.md). For the autonomous
+walker's controls, stop conditions, and extension points, see
+[The agent that walks the lab](agent.md).
+
+## End-to-end flow
+
+1. **Attach to a trusted browser.** `lab-validator session` starts or attaches
+   to a dedicated Edge/Chrome profile over CDP. A human completes the interactive
+   Microsoft sign-in; the validator never stores the Learning Campus password.
+2. **Discover and resolve a lab.** `lab-validator discover --list` reads the
+   signed-in enrolment page. `walk` resolves the supplied URL and title to exactly
+   one enrolment and refuses ambiguous matches.
+3. **Launch and identify the live client.** The tool clicks Launch, waits through
+   provisioning, and attaches to the new Skillable Lab Client tab. It distinguishes
+   the new client from stale tabs by identity, not by "latest tab" position.
+4. **Capture the lab definition.** The instruction frame is extracted into a
+   heading outline, sections, and numbered tasks. A copy is stored inside the run
+   so a resumed run cannot accidentally use a later lab's corpus.
+5. **Capture setup evidence.** Lab-issued credentials are placed in a run-scoped,
+   gitignored vault and added to the redactor. A non-fatal preflight checks the
+   environment before later failures can be misattributed.
+6. **Choose scope.** The review lists every section and task count. The operator
+   can walk all sections or a selected range; unselected work remains explicitly
+   unknown.
+7. **Walk task by task.** `walkloop.next_move()` derives the next action solely
+   from persisted run state. Each numbered task must receive its own verdict before
+   the loop can report and advance the section.
+8. **Write reports continuously.** Every step appends evidence to `trace.jsonl`
+   and refreshes the current section report. The roll-up is rendered from the
+   trace, so interrupted runs remain useful and retracted findings disappear
+   cleanly on re-render.
+
+## Architecture
+
+| Layer | Responsibility | Main code |
+| --- | --- | --- |
+| CLI | One front door; delegates mature commands to their existing scripts | `src/lab_validator/cli.py`, `scripts/` |
+| Browser and launch | Profile management, CDP attachment, sign-in gate, enrolment resolution, launch wait | `browser.py`, `launch.py`, `discovery.py` |
+| Skillable client | Instruction frame, Resources tab, lab clock, VM canvas input and capture | `labclient.py` |
+| Corpus and scope | Parse headings/tasks, detect structural anomalies, select sections | `corpus.py`, `scope.py` |
+| Walk controller | Deterministic state machine and coverage refusals | `walkloop.py` |
+| Evidence | Append-only trace, screenshots, redaction, resumable manifest | `runlog.py`, `imaging.py`, `console.py` |
+| Judgement | Finding taxonomy, ownership domain, learner-path checks | `taxonomy.py`, `learnerpath.py`, skill references |
+| Reporting | Per-section reports and the final gap-analysis roll-up | `report.py` |
+| Agent | Copilot SDK session constrained to learner-visible tools | `agent.py` |
+
+The control-surface preference is **oracle first, API second, DOM third, vision
+last**. Authoritative APIs are best for claims such as model availability;
+Skillable's supported client API is used for lab state; DOM locators are used
+where the learner has a normal web page; pixel coordinates and screenshots are
+used only inside the VM canvas.
+
+## How the CLI and skill work together
+
+The CLI and the skill are complementary, not alternative implementations.
+
+| Part | Owns | Does not own |
+| --- | --- | --- |
+| CLI | Browser attachment, lab launch, persisted run state, deterministic sequencing, evidence validation, redaction, and reporting | Deciding what a learner-visible observation means |
+| Skill | Operating discipline, learner-path rules, evidence standards, finding taxonomy, and ownership judgement | Advancing run state, bypassing controls, or declaring coverage complete |
+| Model under `auto` | One scoped `perform` or `assess` decision at a time | Opening/closing sections, selecting the next move, or editing the report directly |
+
+### The CLI is the executable front door
+
+Installing the package registers `lab-validator = lab_validator.cli:main`.
+`cli.py` implements the orchestration commands (`walk`, `auto`, `scope`, `next`,
+`debug`, `install-skill`, and `package-skill`) and dispatches the lower-level
+commands (`run`, `step`, `text`, `corpus`, `discover`, `drive`, `session`, and
+`auth`) to their existing scripts. This keeps one discoverable command surface
+without creating a second implementation of the proven script behavior.
+
+Commands cooperate through the run folder rather than process memory. A typical
+manual path is:
+
+```text
+session -> discover -> walk -> next -> text/step -> run --report
+```
+
+`walk` performs capture and creates the run; it does not execute the numbered
+tasks. `next` asks the deterministic controller for the next legal move, and
+`step` carries out learner actions or records a task verdict. Because every
+decision is derived from disk, the same commands resume safely after a process
+or browser interruption.
+
+### The skill can enter the solution in two ways
+
+1. **Installed skill.** `lab-validator install-skill` copies
+   `skills/lab-validator` to the Copilot skills directory. A user can then ask
+   Copilot to validate a lab; `SKILL.md` teaches it the CLI workflow and the
+   judgement rules. The repository copy remains the versioned source of truth.
+2. **Repository-local autonomous skill.** `lab-validator auto` creates a Copilot
+   SDK session with `skills/lab-validator` in `skill_directories`. It does not
+   require the separately installed copy. The same skill guides judgement, but
+   Python drives the loop and exposes only the five allowed tools.
+
+For transfer to another Agent Skills-compatible harness,
+`lab-validator package-skill` validates the repository source and creates a
+deterministic `.skill` archive containing the complete skill directory. The
+archive is portable guidance, not the execution engine: the receiving
+environment still needs the CLI and its browser dependencies.
+
+Under `auto`, those tools shell out to the real CLI:
+
+```text
+walkloop.next_move()
+  -> mechanical move: Python executes it directly
+  -> perform/assess: model receives section, tasks, screenshot, and skill
+       -> lab_instructions / lab_tasks
+       -> lab_act / lab_look
+       -> lab_record
+  -> controller fingerprints persisted state and asks next_move() again
+```
+
+This indirection is intentional. The autonomous walker uses the same validation,
+run selection, trace writing, and report refresh paths as a human-operated walk.
+The model cannot claim progress in prose: only a changed run fingerprint and
+task-scoped evidence count.
+
+### Trust boundaries
+
+- A human completes the hardware-bound Learning Campus sign-in.
+- The model receives credential labels, never raw values; role-bound sign-in
+  actions resolve the correct vault entry in code.
+- Tool output is redacted before it reaches the model transcript.
+- Shell, host filesystem, product API, section transitions, and report controls
+  are withheld from the model.
+- Actions that change the lab must use learner-visible controls. Faster APIs may
+  be used as read-only oracles, but not to repair or bypass the documented path.
+
+## The run folder is the source of truth
+
+```text
+runs/<timestamp>/
+  run.json                    manifest, segment state, scope, corpus identity
+  outline.json                immutable task outline used by this run
+  trace.jsonl                 append-only evidence records
+  debug.jsonl                 per-action screen-change measurements
+  credentials.json            run-scoped vault; gitignored and redacted
+  images/                     numbered screenshots
+  sections/<section-id>.md    current report for each walked section
+  gap-analysis.md             roll-up and overall completability verdict
+```
+
+Progress does not live only in process memory. The controller reopens this
+folder before deciding every move, which makes continuing and resuming the same
+operation. A model saying that it completed a task does not count; a correctly
+scoped trace record does.
+
+## The deterministic walk loop
+
+The state machine returns one of seven moves:
+
+| Move | Meaning |
+| --- | --- |
+| `open` | Mark the next selected section in progress |
+| `read` | Scroll/read the instructions through the learner-visible pane |
+| `perform` | Execute outstanding tasks and record one verdict per task |
+| `assess` | A blocker prevents execution; explicitly defer the remaining tasks |
+| `report` | Render a section report current through its latest trace record |
+| `advance` | Close the reported section as done or blocked |
+| `stop` | Scope is complete, time is reserved for reporting, or progress is unsafe |
+
+`open`, `read`, `report`, and `advance` are mechanical. `perform` and `assess`
+need judgement. Important refusals are enforced in code:
+
+- a section cannot complete while a numbered task has no verdict;
+- a section anchor cannot stand in for all task anchors beneath it;
+- a report older than the section's latest evidence must be regenerated;
+- an unresolved task outline is reported as unknown, not as an empty section;
+- blocked work is still assessed so dependent tasks are explicitly deferred;
+- the final lab-clock reserve is protected for writing usable reports.
+
+## How the agent works
+
+`lab-validator auto` uses the same state machine as the manual
+`lab-validator next` workflow. Python owns sequencing; the model is invoked for
+one scoped `perform` or `assess` move at a time.
+
+The model receives the current section text, the exact outstanding task anchors,
+a current VM screenshot, credential labels (never values), and the judgement
+skill. It can use only five tools:
+
+| Tool | Capability |
+| --- | --- |
+| `lab_instructions` | Read the learner-facing section text |
+| `lab_tasks` | List the task anchors that require verdicts |
+| `lab_act` | Click, type, scroll, wait, and capture through the lab VM |
+| `lab_record` | Record one evidence-backed verdict against one task |
+| `lab_look` | Capture the current VM screen |
+
+Opening/closing sections and refreshing reports are withheld from the model and
+executed by the controller. Shell, host filesystem, and product API access are
+denied because they would let the agent repair or bypass a defect a learner
+would still encounter.
+
+Before and after each model turn, the controller fingerprints the run folder:
+trace length, outstanding task anchors, and section status. No change means no
+progress regardless of the transcript. Three unchanged model turns, three
+repeated mechanical moves, two consecutive model timeouts, a closed lab, the
+move ceiling, or the reporting-time reserve all produce an explicit, resumable
+stop.
+
+Tool results pass through a redactor seeded from the run vault. Sign-ins use
+role-bound actions such as `signin:vm` and `signin:portal`; the model does not
+choose between raw passwords. This keeps secrets out of prompts, command lines,
+and reports while preserving the learner path.
+
+## Evidence and verdicts
+
+Every task gets `PASS`, `BLOCKED`, `DEFERRED`, or a `LABnnn` finding code.
+Findings also carry an independent ownership domain:
+
+- `instruction`: the written procedure is wrong or stale;
+- `setup`: the supplied lab environment cannot deliver the documented path;
+- `undetermined`: the available evidence does not yet settle ownership.
+
+`BLOCKED` describes execution state, not a defect by itself. A finding requires
+an observed divergence and evidence. Reports therefore distinguish completed,
+blocked, deferred, unselected, and never-reached work instead of treating every
+absence of findings as success.
+
+## Resume and failure model
+
+Use the existing run folder after interruption:
+
+```powershell
+lab-validator next --run runs\<timestamp>
+lab-validator auto --run runs\<timestamp>
+```
+
+Already recorded steps and section reports are retained. The controller derives
+the next move from disk and verifies the saved corpus identity before counting
+task coverage. Partial coverage is reported as partial or unknown; it is never
+promoted to a clean result.

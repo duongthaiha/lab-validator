@@ -32,16 +32,24 @@ the recorded trace of what was observed.
   (Windows Hello / FIDO) and deliberately un-automatable. Everything after it is not.
 - The lab URL and the lab's title.
 
----
+## How this skill reaches you
+
+The CLI owns browser automation, persisted state, evidence, and reports; this
+skill supplies operating and judgement rules. Installed with
+`lab-validator install-skill`, it recognizes a user's validation request and
+drives the commands below. Under `lab-validator auto`, the CLI loads the
+repository skill directly and asks it only for `PERFORM` and `ASSESS` judgement.
+The repository copy is authoritative, and only task-scoped run evidence advances
+the walk.
 
 ## Two ways to drive this, and how to tell which you are
 
 The nine steps below are the walk. Something has to sequence them, and it is
 either you or `lab-validator auto`.
 
-| | You drive | `auto` drives |
+| | Direct skill/manual CLI | `auto` session |
 |---|---|---|
-| Sequencing | you run each command | Python runs the loop; a model is asked only to PERFORM |
+| Sequencing | you run each command through the CLI | Python runs the loop; a model is asked only to PERFORM or ASSESS |
 | Steps 1–4, 8 | yours | already handled — do not repeat them |
 | Steps 5–7, 9 | yours | **yours, and the reason you are reading this** |
 
@@ -52,7 +60,8 @@ terminal reports as working while the learner still cannot finish it. Under
 is the judgement in Steps 5–7 and 9. Trying to run the commands in Steps 2, 3, 4
 and 8 will simply be refused.
 
-Either way the rules are the same, because it is the same loop.
+Either way it is the same persisted loop: the manual path answers `next_move()`
+with CLI commands; `auto` uses five CLI-backed tools while Python owns state.
 
 ## Step 1 — Attach to a browser
 

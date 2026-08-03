@@ -21,9 +21,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import importlib.util
+import re
 import sys
 import threading
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,6 +56,7 @@ BUILTINS = {
     "next": "what the walk loop says to do now, and why",
     "debug": "read a finished run back and see what each action did to the screen",
     "install-skill": "copy skills/lab-validator into ~/.copilot/skills",
+    "package-skill": "build a portable .skill archive for other agent harnesses",
 }
 
 
@@ -462,6 +466,75 @@ def cmd_install_skill(args) -> int:
     return 0
 
 
+# ---- skill package -------------------------------------------------------
+
+
+def _skill_source_files(source: Path) -> list[Path]:
+    """Validate the repository skill and return its portable files."""
+    skill = source / "SKILL.md"
+    if not skill.is_file():
+        raise ValueError(f"{skill} is missing")
+
+    body = skill.read_text(encoding="utf-8")
+    if not body.startswith("---\n"):
+        raise ValueError("SKILL.md has no YAML frontmatter")
+    frontmatter_end = body.find("\n---", 4)
+    if frontmatter_end < 0:
+        raise ValueError("SKILL.md frontmatter is not closed")
+    frontmatter = body[4:frontmatter_end]
+    name = re.search(r"^name:\s*([a-z0-9-]+)\s*$", frontmatter, re.MULTILINE)
+    description = re.search(r"^description:\s*(.+)$", frontmatter, re.MULTILINE)
+    if not name or name.group(1) != source.name:
+        raise ValueError(f"SKILL.md name must be {source.name!r}")
+    if not description:
+        raise ValueError("SKILL.md frontmatter has no description")
+    if len(body.splitlines()) >= 500:
+        raise ValueError("SKILL.md must stay under 500 lines")
+
+    for reference in set(re.findall(r"references/([a-z0-9-]+\.md)", body)):
+        if not (source / "references" / reference).is_file():
+            raise ValueError(f"referenced file is missing: references/{reference}")
+
+    files = sorted(path for path in source.rglob("*") if path.is_file())
+    symlinks = [path for path in files if path.is_symlink()]
+    if symlinks:
+        names = ", ".join(str(path.relative_to(source)) for path in symlinks)
+        raise ValueError(f"skill packages cannot contain symlinks: {names}")
+    return files
+
+
+def cmd_package_skill(args) -> int:
+    """Build a deterministic Agent Skills archive from the repository source."""
+    source = ROOT / "skills" / "lab-validator"
+    try:
+        files = _skill_source_files(source)
+    except ValueError as exc:
+        print(f"cannot package skill: {exc}", file=sys.stderr)
+        return 2
+
+    output = Path(args.out or "dist/lab-validator.skill").expanduser().resolve()
+    if output.suffix != ".skill":
+        print("--out must name a .skill file", file=sys.stderr)
+        return 2
+    if output.is_relative_to(source.resolve()):
+        print("--out must be outside the skill source directory", file=sys.stderr)
+        return 2
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, "w") as archive:
+        for path in files:
+            relative = path.relative_to(source.parent).as_posix()
+            entry = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            entry.external_attr = 0o100644 << 16
+            archive.writestr(entry, path.read_bytes())
+
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    print(f"packaged {len(files)} file(s) into {output}")
+    print(f"sha256   : {digest}")
+    return 0
+
+
 # ---- next: what the loop says to do now ----------------------------------
 
 
@@ -776,6 +849,14 @@ def main() -> int:
         s.add_argument("--into", help="skills directory (default: ~/.copilot/skills)")
         s.add_argument("--dry-run", action="store_true", help="list what would be written")
         return cmd_install_skill(s.parse_args(args.rest))
+
+    if args.command == "package-skill":
+        s = argparse.ArgumentParser(prog="lab-validator package-skill")
+        s.add_argument(
+            "--out",
+            help="output .skill file (default: dist/lab-validator.skill)",
+        )
+        return cmd_package_skill(s.parse_args(args.rest))
 
     if args.command in COMMANDS:
         return _delegate(COMMANDS[args.command][0], args.rest)

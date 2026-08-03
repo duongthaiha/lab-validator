@@ -97,20 +97,30 @@ has not yet been observed end to end — the one run that got that far ended whe
 the lab itself closed. Treat step 4 as the documented path, not a demonstrated
 one, and see [`docs/agent.md`](docs/agent.md) for what each stop message means.
 
-## Guidance — five documents, five different questions
+## Guidance — choose the document for the question
 
 The guidance is deliberately split, because "how do I run this" and "is what I
 just saw a defect" are not the same question and get read at different moments.
-Pick by the question, not by reading all five:
+This README is the quick start and operator journey; it is not the canonical
+reference for every command or the agent's internal contract. Pick by the
+question, not by reading all five:
 
 | Question | Read |
 | --- | --- |
+| How does the whole solution fit together? | [`docs/solution.md`](docs/solution.md) |
+| What commands and options does the CLI provide? | [`docs/cli.md`](docs/cli.md) |
 | How do I run a validation from nothing? | this README, [Running a validation](#running-a-validation) |
 | What do I do *next*, mid-walk? | don't read — ask: `lab-validator next` |
 | Is this observation a defect? Whose? What evidence do I need? | [`skills/lab-validator/references/judgement.md`](skills/lab-validator/references/judgement.md) |
 | What are the steps of a walk, in order? | [`skills/lab-validator/SKILL.md`](skills/lab-validator/SKILL.md) |
 | The agent stopped — why? What was it allowed to do? How do I change it? | [`docs/agent.md`](docs/agent.md) |
 | Why is the engine built this way, and what went wrong before? | [`docs/approach.md`](docs/approach.md) |
+
+The boundaries between them are deliberate. `docs/solution.md` explains how the
+parts cooperate, `docs/cli.md` describes the executable surface, `docs/agent.md`
+describes the autonomous controller, and `SKILL.md` tells a Copilot agent how to
+operate and judge a walk. If two documents appear to disagree about a command,
+the real parser and its CLI drift tests are authoritative.
 
 `judgement.md` is the one worth reading even if you never run this tool. Each of
 its principles was paid for by a wrong finding — a defect claimed on one
@@ -633,14 +643,46 @@ becomes required rather than silently defaulting to whichever lab came first.
 
 ## Using it as an agent skill
 
-The judgement that makes a report worth reading — when an observation is a
-defect, which side is at fault, what evidence is required, when to withdraw a
-finding — is packaged as an agent skill in [`skills/lab-validator/`](skills/lab-validator/).
+The executable and the skill are different parts of the same solution:
+
+- **The CLI is the engine.** It attaches to the browser, persists the run,
+  chooses the next legal move, records evidence, and renders reports.
+- **The skill is the operating and judgement contract.** It tells Copilot how to
+  follow that engine without bypassing the learner path, and how to decide when
+  an observation is a finding.
+
+The skill is packaged in [`skills/lab-validator/`](skills/lab-validator/). Install
+it when you want Copilot to recognize requests such as "validate this lab" and
+drive the CLI workflow directly:
 
 ```powershell
 lab-validator install-skill              # copies it to ~/.copilot/skills
 lab-validator install-skill --dry-run    # show what would be written
 ```
+
+To share the same skill with another Agent Skills-compatible harness, build one
+portable archive:
+
+```powershell
+lab-validator package-skill
+# dist\lab-validator.skill
+```
+
+The `.skill` file is a ZIP archive with `lab-validator/SKILL.md` and all reference
+files under one root directory. Import it using the receiving harness's skill
+installer, or extract it into that harness's skills directory. The package is
+instructions and references, not a standalone executable: the target machine
+must also have this repository's `lab-validator` CLI and browser dependencies
+installed. A SHA-256 digest is printed when the package is built so the file can
+be verified after transfer.
+
+`lab-validator auto` does not depend on that installed copy. It starts a Copilot
+SDK session and loads the repository skill directly, then exposes only five
+learner-visible CLI-backed tools. Python still owns sequencing, section state,
+coverage checks, and report generation; the model supplies the `PERFORM` and
+`ASSESS` judgement. See [How Lab Validator works](docs/solution.md) for the full
+interaction and [The agent that walks the lab](docs/agent.md) for controls and
+stop behavior.
 
 The repo copy is the source of truth; the installed copy is a deployment of it.
 A test asserts the two have not drifted, and another parses every command out of
@@ -676,6 +718,8 @@ ruff check src scripts tests
 
 ```
 docs/approach.md                    architecture, findings and reuse guide
+docs/solution.md                    concise end-to-end solution architecture
+docs/cli.md                         CLI workflows, commands, options and recovery
 docs/agent.md                       the autonomous walker: stops, limits, changing it
 docs/gapanalysis.md                 learner-facing gaps found in the target lab
 skills/lab-validator/               the agent skill — judgement, taxonomy, traps
