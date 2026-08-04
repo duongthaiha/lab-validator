@@ -55,9 +55,7 @@ def test_install_skill_is_also_implemented_locally():
 
 
 def test_package_skill_is_also_implemented_locally():
-    assert "prepare-skill" not in cli.COMMANDS
     assert "package-skill" not in cli.COMMANDS
-    assert callable(cli.cmd_prepare_skill)
     assert callable(cli.cmd_package_skill)
 
 
@@ -78,7 +76,7 @@ def test_the_help_advertises_the_locally_implemented_commands():
     text = buf.getvalue()
     assert all(
         command in text
-        for command in ("walk", "install-skill", "prepare-skill", "package-skill")
+        for command in ("walk", "install-skill", "package-skill")
     )
 
 
@@ -106,16 +104,47 @@ def test_packaging_the_skill_writes_one_portable_archive(tmp_path):
         names = set(archive.namelist())
         assert {
             "lab-validator/SKILL.md",
+            "lab-validator/references/judgement.md",
+            "lab-validator/assets/gap-analysis-template.md",
             "lab-validator/scripts/install_runtime.py",
-            "lab-validator/runtime/scripts/lab_step.py",
-            "lab-validator/runtime/src/lab_validator/cli.py",
-            "lab-validator/runtime/pyproject.toml",
-            "lab-validator/runtime/targets/azure-ai-platform.toml",
+            "lab-validator/scripts/lab_step.py",
+            "lab-validator/src/lab_validator/cli.py",
+            "lab-validator/pyproject.toml",
+            "lab-validator/targets/azure-ai-platform.toml",
         } <= names
         assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist())
-        pyproject = archive.read("lab-validator/runtime/pyproject.toml").decode()
+        pyproject = archive.read("lab-validator/pyproject.toml").decode()
         assert 'lab-validator = "lab_validator.cli:main"' in pyproject
         assert "readme =" not in pyproject
+
+
+def test_the_package_ships_nothing_the_repository_only_needs(tmp_path):
+    """The repository *is* the skill, so over-inclusion is the new failure mode.
+
+    While the runtime lived in a staged copy, the risk ran the other way: the
+    copy went stale and packaging refused. Publishing straight from the repo
+    removes that, and replaces it with a quieter one -- a careless glob ships
+    the test suite, the docs, the git history, or whatever a tool has just
+    written into the working tree. None of that announces itself in an archive
+    that extracts and loads perfectly well.
+    """
+    output = tmp_path / "lab-validator.skill"
+    assert cli.cmd_package_skill(type("N", (), {"out": str(output)})()) == 0
+
+    with zipfile.ZipFile(output) as archive:
+        names = [name.split("/", 1)[1] for name in archive.namelist()]
+
+    for name in names:
+        assert not name.startswith(("tests/", "docs/", ".git", ".venv/", "runs/", "dist/")), (
+            f"{name} is repository-only and must not be published"
+        )
+        assert "__pycache__" not in name and not name.endswith((".pyc", ".egg-info")), (
+            f"{name} is generated and must not be published"
+        )
+    assert "scripts/agent_smoke.py" not in names, (
+        "the smoke harness needs the test corpus, so shipping it offers a command "
+        "that cannot work from an extracted archive"
+    )
 
 
 def test_skill_package_is_reproducible(tmp_path):
@@ -127,34 +156,64 @@ def test_skill_package_is_reproducible(tmp_path):
     assert first.read_bytes() == second.read_bytes()
 
 
-def test_skill_package_validation_rejects_a_missing_reference(tmp_path):
-    source = tmp_path / "demo"
-    source.mkdir()
-    (source / "SKILL.md").write_text(
-        "---\nname: demo\ndescription: demo skill\n---\n"
-        "Read references/missing.md before acting.\n",
-        encoding="utf-8",
-    )
-
+def test_skill_validation_rejects_a_missing_reference():
     with pytest.raises(ValueError, match="references/missing.md"):
-        cli._skill_source_files(source)
+        cli._validate_skill(
+            "---\nname: lab-validator\ndescription: demo skill\n---\n"
+            "Read references/missing.md before acting.\n"
+        )
 
 
-def test_prepared_runtime_matches_the_repository():
-    expected = cli._runtime_entries()
-    runtime = cli.REPO_SKILL / "runtime"
+def test_skill_validation_does_not_depend_on_the_checkout_name():
+    """A clone into `lab-validator-2/` is somebody's working copy, not a defect.
 
-    assert expected
-    assert all(
-        (runtime / Path(relative)).read_bytes() == content
-        for relative, content in expected.items()
-    )
-    actual = {
-        path.relative_to(runtime).as_posix()
-        for path in runtime.rglob("*")
+    The name is fixed by the spec and by the directory the archive extracts to,
+    so it is checked against a constant rather than against `ROOT.name`.
+    """
+    with pytest.raises(ValueError, match="lab-validator"):
+        cli._validate_skill("---\nname: something-else\ndescription: d\n---\nbody\n")
+
+
+def test_installing_removes_files_the_skill_no_longer_contains(tmp_path):
+    """An install that only adds leaves the previous layout lying underneath.
+
+    That debris is not inert. When the skill's runtime moved out of a nested
+    `runtime/` directory, the old copy stayed behind in `~/.copilot/skills` --
+    a second, frozen engine inside the very skill an agent reads.
+    """
+    dest = tmp_path / "lab-validator"
+    (dest / "runtime" / "src").mkdir(parents=True)
+    (dest / "runtime" / "src" / "cli.py").write_text("stale", encoding="utf-8")
+
+    args = type("N", (), {"into": str(tmp_path), "dry_run": False})()
+    assert cli.cmd_install_skill(args) == 0
+
+    assert not (dest / "runtime").exists(), "the empty directory should go too"
+    assert (dest / "SKILL.md").exists()
+
+
+def test_a_dry_run_installs_and_removes_nothing(tmp_path):
+    dest = tmp_path / "lab-validator"
+    dest.mkdir()
+    (dest / "stale.md").write_text("stale", encoding="utf-8")
+
+    args = type("N", (), {"into": str(tmp_path), "dry_run": True})()
+    assert cli.cmd_install_skill(args) == 0
+
+    assert (dest / "stale.md").exists()
+    assert not (dest / "SKILL.md").exists()
+
+
+def test_the_installed_and_packaged_trees_are_the_same_files(tmp_path):
+    """One list drives both, so neither can quietly gain or lose a file."""
+    args = type("N", (), {"into": str(tmp_path), "dry_run": False})()
+    assert cli.cmd_install_skill(args) == 0
+    installed = {
+        path.relative_to(tmp_path / "lab-validator").as_posix()
+        for path in (tmp_path / "lab-validator").rglob("*")
         if path.is_file()
     }
-    assert actual == set(expected)
+    assert installed == set(cli._skill_files())
 
 
 def test_the_scripts_directory_is_found_relative_to_the_package():

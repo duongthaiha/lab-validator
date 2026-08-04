@@ -24,7 +24,6 @@ import contextlib
 import hashlib
 import importlib.util
 import re
-import shutil
 import sys
 import threading
 import zipfile
@@ -32,15 +31,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
-REPO_SKILL = ROOT / "skills" / "lab-validator"
-PACKAGED_SKILL = ROOT.parent if ROOT.name == "runtime" else None
-SKILL_SOURCE = (
-    REPO_SKILL
-    if REPO_SKILL.is_dir()
-    else PACKAGED_SKILL
-    if PACKAGED_SKILL and (PACKAGED_SKILL / "SKILL.md").is_file()
-    else ROOT
-)
+
+#: The skill's directory name, which is fixed by the Agent Skills spec rather
+#: than by whatever a checkout happens to be called. Deriving it from
+#: ``ROOT.name`` would make `package-skill` fail for anyone who cloned into a
+#: differently-named folder, which is not a defect in their skill.
+SKILL_NAME = "lab-validator"
 
 #: sub-command -> script filename. Kept as data so the list is the help text.
 COMMANDS = {
@@ -65,8 +61,7 @@ BUILTINS = {
     "scope": "review what was captured and choose which sections to walk",
     "next": "what the walk loop says to do now, and why",
     "debug": "read a finished run back and see what each action did to the screen",
-    "install-skill": "copy skills/lab-validator into ~/.copilot/skills",
-    "prepare-skill": "stage the CLI runtime inside skills/lab-validator for inspection",
+    "install-skill": "copy this skill into ~/.copilot/skills",
     "package-skill": "build a portable .skill archive for other agent harnesses",
 }
 
@@ -439,140 +434,179 @@ def cmd_auto(args) -> int:
     print(f"report: {run.dir / 'gap-analysis.md'}")
     return 0
 
+# ---- the skill: install and package --------------------------------------
+#
+# This repository *is* the skill. `SKILL.md`, `references/` and `assets/` sit at
+# the root beside the code they drive, and the two commands below publish a
+# curated subset of it: one to `~/.copilot/skills`, one to a `.skill` archive.
+#
+# There used to be a staged copy of the runtime under `skills/lab-validator/`,
+# which meant every edit to `src/` had to be re-staged before packaging would
+# agree with the source. That copy also carried its own `pyproject.toml`, so
+# tools looking for a project root treated it as a second project and wrote
+# caches into it. Both failures were invisible until a test caught them. There
+# is now one tree and one file list.
 
-# ---- skill install -------------------------------------------------------
+
+#: Everything that ships, as globs relative to the repository root. Kept as data
+#: because the same list has to drive the installer, the packager and the test
+#: that checks nothing else leaked in -- and because the risk has inverted: with
+#: the repo as the skill, the mistake to guard against is shipping `tests/`, not
+#: forgetting to re-stage.
+SKILL_CONTENTS = (
+    "SKILL.md",
+    ".env.example",
+    "pyproject.toml",
+    "references/*.md",
+    "assets/*.md",
+    "src/lab_validator/*.py",
+    "targets/*.toml",
+)
+
+#: The scripts that ship. Deliberately not `scripts/*.py`: `agent_smoke.py` is a
+#: development harness that expects the test corpus, and shipping it would offer
+#: a command that cannot work from an extracted archive.
+SKILL_SCRIPTS = ("install_runtime.py",) + tuple(script for script, _ in COMMANDS.values())
 
 
-def cmd_install_skill(args) -> int:
-    """Copy the repo's skill into the agent's skills directory.
+def _validate_skill(body: str) -> None:
+    """Refuse to publish a skill that a harness would reject on load.
 
-    The repo copy is the source of truth: a skill living only in
-    ``~/.copilot/skills`` is unreviewable, unversioned, and lost with the
-    machine. This makes deploying it one command, which is what stops the two
-    copies drifting -- and a test asserts they have not.
+    Every rule here has already been enforced somewhere else -- by a test, or by
+    the Agent Skills spec -- and is repeated at publish time because that is the
+    last point where the failure is still ours. A harness that cannot parse the
+    frontmatter reports a broken skill, not a broken build.
     """
-    source = SKILL_SOURCE
-    if not source.is_dir():
-        print(f"{source} is missing", file=sys.stderr)
-        return 1
-    dest = Path(args.into).expanduser() if args.into else Path.home() / ".copilot" / "skills"
-    dest = dest / "lab-validator"
-
-    copied = []
-    for path in sorted(source.rglob("*")):
-        if path.is_dir():
-            continue
-        target = dest / path.relative_to(source)
-        if args.dry_run:
-            copied.append(target)
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-        copied.append(target)
-
-    verb = "would install" if args.dry_run else "installed"
-    print(f"{verb} {len(copied)} file(s) into {dest}")
-    for path in copied:
-        print(f"  {path.relative_to(dest)}")
-    return 0
-
-
-# ---- skill package -------------------------------------------------------
-
-
-def _skill_source_files(source: Path) -> list[Path]:
-    """Validate the repository skill and return its portable files."""
-    skill = source / "SKILL.md"
-    if not skill.is_file():
-        raise ValueError(f"{skill} is missing")
-
-    body = skill.read_text(encoding="utf-8")
     if not body.startswith("---\n"):
         raise ValueError("SKILL.md has no YAML frontmatter")
     frontmatter_end = body.find("\n---", 4)
     if frontmatter_end < 0:
         raise ValueError("SKILL.md frontmatter is not closed")
     frontmatter = body[4:frontmatter_end]
+
     name = re.search(r"^name:\s*([a-z0-9-]+)\s*$", frontmatter, re.MULTILINE)
-    description = re.search(r"^description:\s*(.+)$", frontmatter, re.MULTILINE)
-    if not name or name.group(1) != source.name:
-        raise ValueError(f"SKILL.md name must be {source.name!r}")
-    if not description:
+    if not name or name.group(1) != SKILL_NAME:
+        raise ValueError(f"SKILL.md name must be {SKILL_NAME!r}")
+    if not re.search(r"^description:\s*(.+)$", frontmatter, re.MULTILINE):
         raise ValueError("SKILL.md frontmatter has no description")
     if len(body.splitlines()) >= 500:
         raise ValueError("SKILL.md must stay under 500 lines")
 
-    for reference in set(re.findall(r"references/([a-z0-9-]+\.md)", body)):
-        if not (source / "references" / reference).is_file():
-            raise ValueError(f"referenced file is missing: references/{reference}")
-
-    files = sorted(path for path in source.rglob("*") if path.is_file())
-    symlinks = [path for path in files if path.is_symlink()]
-    if symlinks:
-        names = ", ".join(str(path.relative_to(source)) for path in symlinks)
-        raise ValueError(f"skill packages cannot contain symlinks: {names}")
-    return files
+    for reference in set(re.findall(r"(references|assets)/([a-z0-9-]+\.md)", body)):
+        relative = "/".join(reference)
+        if not (ROOT / relative).is_file():
+            raise ValueError(f"referenced file is missing: {relative}")
 
 
-def _runtime_entries() -> dict[str, bytes]:
-    """Return the repository runtime in its staged directory layout."""
-    paths = [
-        ROOT / "pyproject.toml",
-        ROOT / ".env.example",
-        *sorted((ROOT / "src" / "lab_validator").glob("*.py")),
-        *(SCRIPTS / script for script, _ in COMMANDS.values()),
-        *sorted((ROOT / "targets").glob("*.toml")),
-    ]
+def _skill_files() -> dict[str, bytes]:
+    """The published skill, as ``relative posix path -> bytes``.
+
+    Bytes rather than text so that what is installed and what is packaged are
+    the same octets. Reading as text would let the platform rewrite line endings
+    on the way through, and the drift test between the repo and the installed
+    copy would then be comparing two things it had itself changed.
+    """
+    skill = ROOT / "SKILL.md"
+    if not skill.is_file():
+        raise ValueError(f"{skill} is missing")
+    _validate_skill(skill.read_text(encoding="utf-8"))
+
+    paths: list[Path] = []
+    for pattern in SKILL_CONTENTS:
+        matched = sorted(ROOT.glob(pattern))
+        if not matched:
+            raise ValueError(f"skill content is missing: {pattern}")
+        paths.extend(matched)
+    for script in SKILL_SCRIPTS:
+        paths.append(SCRIPTS / script)
+
     missing = [path for path in paths if not path.is_file()]
     if missing:
+        raise ValueError("missing: " + ", ".join(str(path) for path in missing))
+    links = [path for path in paths if path.is_symlink()]
+    if links:
         raise ValueError(
-            "runtime file(s) are missing: " + ", ".join(str(path) for path in missing)
+            "skill packages cannot contain symlinks: "
+            + ", ".join(path.relative_to(ROOT).as_posix() for path in links)
         )
 
-    entries = {}
+    entries: dict[str, bytes] = {}
     for path in paths:
         relative = path.relative_to(ROOT).as_posix()
         content = path.read_bytes()
         if relative == "pyproject.toml":
-            content = re.sub(
-                rb"^readme\s*=\s*.+\r?\n",
-                b"",
-                content,
-                flags=re.MULTILINE,
-            )
+            # `readme = "README.md"` would make an install from the extracted
+            # archive fail outright: the README is repo documentation and is not
+            # published, and setuptools treats a missing readme as fatal.
+            content = re.sub(rb"^readme\s*=\s*.+\r?\n", b"", content, flags=re.MULTILINE)
         entries[relative] = content
     return entries
 
 
-def cmd_prepare_skill(_args) -> int:
-    """Create the inspectable runtime tree consumed by ``package-skill``."""
-    if not REPO_SKILL.is_dir():
-        print("prepare-skill must run from a repository checkout", file=sys.stderr)
-        return 2
+def cmd_install_skill(args) -> int:
+    """Copy this skill into the agent's skills directory.
+
+    The repo is the source of truth: a skill living only in
+    ``~/.copilot/skills`` is unreviewable, unversioned, and lost with the
+    machine. This makes deploying it one command, which is what stops the two
+    copies drifting -- and a test asserts they have not.
+    """
     try:
-        entries = _runtime_entries()
+        entries = _skill_files()
     except ValueError as exc:
-        print(f"cannot prepare skill: {exc}", file=sys.stderr)
+        print(f"cannot install skill: {exc}", file=sys.stderr)
         return 2
 
-    runtime = REPO_SKILL / "runtime"
-    if runtime.exists():
-        shutil.rmtree(runtime)
-    for relative, content in entries.items():
-        target = runtime / Path(relative)
+    dest = Path(args.into).expanduser() if args.into else Path.home() / ".copilot" / "skills"
+    dest = dest / SKILL_NAME
+
+    # Prune before writing. An install that only ever adds leaves every file the
+    # skill used to have sitting in the destination -- and the debris is not
+    # inert: a renamed module leaves the old one importable, and a dropped
+    # directory leaves a stale second copy of the engine inside the very skill an
+    # agent reads. The destination belongs to this command, so it owns removals
+    # too. Restricted to files this command could have written, so pointing
+    # `--into` somewhere unfortunate cannot take anything else with it.
+    stale = sorted(
+        path
+        for path in (dest.rglob("*") if dest.exists() else ())
+        if path.is_file() and path.relative_to(dest).as_posix() not in entries
+    )
+
+    for relative, content in sorted(entries.items()):
+        if args.dry_run:
+            continue
+        target = dest / Path(relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
 
-    print(f"staged {len(entries)} runtime file(s) under {runtime}")
-    print("inspect this directory before running `lab-validator package-skill`")
+    if not args.dry_run:
+        for path in stale:
+            path.unlink()
+        for directory in sorted(
+            (p for p in dest.rglob("*") if p.is_dir()),
+            key=lambda p: len(p.parts),
+            reverse=True,
+        ):
+            if not any(directory.iterdir()):
+                directory.rmdir()
+
+    verb = "would install" if args.dry_run else "installed"
+    print(f"{verb} {len(entries)} file(s) into {dest}")
+    for relative in sorted(entries):
+        print(f"  {relative}")
+    if stale:
+        removed = "would remove" if args.dry_run else "removed"
+        print(f"{removed} {len(stale)} file(s) the skill no longer contains")
+        for path in stale:
+            print(f"  - {path.relative_to(dest).as_posix()}")
     return 0
 
 
 def cmd_package_skill(args) -> int:
-    """Package the already-staged, inspectable skill directory."""
-    source = SKILL_SOURCE
+    """Build the portable archive another harness can extract and load."""
     try:
-        files = _skill_source_files(source)
+        entries = _skill_files()
     except ValueError as exc:
         print(f"cannot package skill: {exc}", file=sys.stderr)
         return 2
@@ -581,57 +615,20 @@ def cmd_package_skill(args) -> int:
     if output.suffix != ".skill":
         print("--out must name a .skill file", file=sys.stderr)
         return 2
-    if output.is_relative_to(source.resolve()):
-        print("--out must be outside the skill source directory", file=sys.stderr)
-        return 2
-
-    if REPO_SKILL.is_dir():
-        try:
-            expected = _runtime_entries()
-        except ValueError as exc:
-            print(f"cannot package skill: {exc}", file=sys.stderr)
-            return 2
-        runtime = source / "runtime"
-        stale = [
-            relative
-            for relative, content in expected.items()
-            if not (runtime / Path(relative)).is_file()
-            or (runtime / Path(relative)).read_bytes() != content
-        ]
-        actual = {
-            path.relative_to(runtime).as_posix()
-            for path in runtime.rglob("*")
-            if path.is_file()
-        } if runtime.is_dir() else set()
-        unexpected = sorted(actual - set(expected))
-        if stale:
-            print(
-                "cannot package skill; staged runtime is missing or stale: "
-                + ", ".join(stale)
-                + ". Run `lab-validator prepare-skill`, inspect it, then package.",
-                file=sys.stderr,
-            )
-            return 2
-        if unexpected:
-            print(
-                "cannot package skill; staged runtime contains generated or unexpected files: "
-                + ", ".join(unexpected)
-                + ". Run `lab-validator prepare-skill` to recreate a clean runtime.",
-                file=sys.stderr,
-            )
-            return 2
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w") as archive:
-        for path in files:
-            relative = f"{source.name}/{path.relative_to(source).as_posix()}"
-            entry = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+        # Fixed timestamps and permissions: a rebuild from unchanged sources has
+        # to produce an identical file, or "did this archive change?" can only be
+        # answered by unpacking it.
+        for relative, content in sorted(entries.items()):
+            entry = zipfile.ZipInfo(f"{SKILL_NAME}/{relative}", date_time=(1980, 1, 1, 0, 0, 0))
             entry.compress_type = zipfile.ZIP_DEFLATED
             entry.external_attr = 0o100644 << 16
-            archive.writestr(entry, path.read_bytes())
+            archive.writestr(entry, content)
 
     digest = hashlib.sha256(output.read_bytes()).hexdigest()
-    print(f"packaged {len(files)} file(s) into {output}")
+    print(f"packaged {len(entries)} file(s) into {output}")
     print(f"sha256   : {digest}")
     return 0
 
@@ -950,10 +947,6 @@ def main() -> int:
         s.add_argument("--into", help="skills directory (default: ~/.copilot/skills)")
         s.add_argument("--dry-run", action="store_true", help="list what would be written")
         return cmd_install_skill(s.parse_args(args.rest))
-
-    if args.command == "prepare-skill":
-        s = argparse.ArgumentParser(prog="lab-validator prepare-skill")
-        return cmd_prepare_skill(s.parse_args(args.rest))
 
     if args.command == "package-skill":
         s = argparse.ArgumentParser(prog="lab-validator package-skill")

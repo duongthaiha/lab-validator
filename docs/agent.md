@@ -39,8 +39,8 @@ still produces a confident report.
 
 ### Where the skill enters
 
-`auto` creates a Copilot SDK session and passes the repository's
-`skills/lab-validator` directory in `skill_directories`. The skill contributes
+`auto` creates a Copilot SDK session and passes the repository root — which *is*
+the skill directory — in `skill_directories`. The skill contributes
 the learner-path operating rules, evidence standards, taxonomy, and ownership
 judgement used during a model turn. It does not implement the controller.
 

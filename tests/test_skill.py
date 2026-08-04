@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from lab_validator import cli  # noqa: E402
 
-SKILL = ROOT / "skills" / "lab-validator" / "SKILL.md"
+SKILL = ROOT / "SKILL.md"
 INSTALLED = Path.home() / ".copilot" / "skills" / "lab-validator" / "SKILL.md"
 
 INVOCATION = re.compile(r"^[ \t]*lab-validator[ \t]+(?P<rest>.+?)[ \t]*$", re.M)
@@ -191,14 +191,19 @@ def test_the_description_carries_triggers():
 def test_the_installed_copy_has_not_drifted_from_the_repo():
     """The tests above check the repo copy; the agent reads the installed one.
     Without this, the reviewed version and the running version are free to
-    disagree -- and the running one wins, silently."""
-    repo_files = sorted(p.relative_to(SKILL.parent) for p in SKILL.parent.rglob("*.md"))
-    for rel in repo_files:
-        live = INSTALLED.parent / rel
-        assert live.exists(), f"{rel} is in the repo but not installed; re-run the install step"
-        assert (
-            live.read_text(encoding="utf-8") == (SKILL.parent / rel).read_text(encoding="utf-8")
-        ), f"{rel} differs between the repo and ~/.copilot/skills; the repo is the source of truth"
+    disagree -- and the running one wins, silently.
+
+    The comparison runs over `_skill_files()` rather than everything under the
+    repo root, because the repo root is now the skill: sweeping it would drag in
+    `tests/`, `docs/` and whatever a browser profile has left lying around.
+    """
+    for relative, content in cli._skill_files().items():
+        live = INSTALLED.parent / relative
+        assert live.exists(), f"{relative} is in the repo but not installed; re-run install-skill"
+        assert live.read_bytes() == content, (
+            f"{relative} differs between the repo and ~/.copilot/skills; "
+            "the repo is the source of truth"
+        )
 
 
 def test_the_steps_are_numbered_sequentially_from_one():

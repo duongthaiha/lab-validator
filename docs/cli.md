@@ -27,8 +27,8 @@ copilot
 The package entry point is `lab_validator.cli:main`. It provides one command
 surface over two implementation styles:
 
-- `walk`, `auto`, `scope`, `next`, `debug`, `install-skill`, `prepare-skill`,
-  and `package-skill` are orchestration commands implemented in
+- `walk`, `auto`, `scope`, `next`, `debug`, `install-skill` and `package-skill`
+  are orchestration commands implemented in
   `src/lab_validator/cli.py`;
 - `run`, `step`, `text`, `corpus`, `discover`, `drive`, `session`, and `auth`
   delegate to the established scripts under `scripts/`.
@@ -104,7 +104,6 @@ or discard recorded evidence.
 | `session` | Create/attach browser profiles and inspect tabs |
 | `auth` | Manage the encrypted storage-state fallback |
 | `install-skill` | Install the repository's judgement skill for Copilot |
-| `prepare-skill` | Stage the CLI runtime inside the skill directory for inspection |
 | `package-skill` | Build one portable `.skill` archive for another agent harness |
 
 ## Primary commands
@@ -297,8 +296,9 @@ interactive path is the attached dedicated browser profile.
 lab-validator install-skill [--into <skills-directory>] [--dry-run]
 ```
 
-Copies `skills/lab-validator` into the Copilot skills directory. The repository
-copy remains the source of truth. This installed copy is for direct Copilot skill
+Copies the skill — `SKILL.md`, `references/`, `assets/` and the CLI runtime that
+backs them — into the Copilot skills directory. The repository copy remains the
+source of truth. This installed copy is for direct Copilot skill
 invocation. `lab-validator auto` instead loads the repository skill directly
 through the Copilot SDK, so installing the skill is not an `auto` prerequisite.
 
@@ -309,23 +309,21 @@ evidence validation, and reporting remain enforced by Python.
 ### `package-skill`
 
 ```powershell
-lab-validator prepare-skill
-# inspect skills\lab-validator\runtime
 lab-validator package-skill
 lab-validator package-skill --out <path\lab-validator.skill>
 ```
 
-`prepare-skill` recreates `skills\lab-validator\runtime` from the repository's
-CLI source, delegated scripts, packaging metadata, environment template, and
-target descriptors. This is the exact runtime tree intended for distribution,
-so it can be reviewed before an archive is created.
+The repository *is* the skill, so packaging is a publish rather than a stage:
+`install-skill` and `package-skill` are two writers over one curated file list,
+which is why the installed copy and the archive are byte-identical and neither
+can drift from the code. To see exactly what will be published without building
+anything, run `lab-validator install-skill --dry-run`.
 
 The default package output is `dist\lab-validator.skill`. `package-skill`
-validates the frontmatter, progressive-disclosure limit, referenced files, and
-that the staged runtime still byte-matches the repository. It refuses stale
-content rather than silently replacing what was reviewed. The deterministic
-ZIP-format archive includes the whole visible skill directory and prints its
-SHA-256 digest for transfer verification.
+validates the frontmatter, the progressive-disclosure limit, and that every
+referenced file resolves; it refuses symlinks rather than following them out of
+the tree. The deterministic ZIP-format archive prints its SHA-256 digest for
+transfer verification.
 
 The archive contains one top-level `lab-validator` directory:
 
@@ -333,14 +331,17 @@ The archive contains one top-level `lab-validator` directory:
 lab-validator/
   SKILL.md
   references/
+  assets/
   scripts/
     install_runtime.py
-  runtime/
-    scripts/lab_*.py
-    src/lab_validator/
-    targets/
-    pyproject.toml
+    lab_*.py
+  src/lab_validator/
+  targets/
+  pyproject.toml
 ```
+
+Repository-only material — `tests/`, `docs/`, `README.md`, git metadata — is
+never published.
 
 Use the receiving agent harness's `.skill` import command where available.
 Otherwise, extract the archive into its configured skills directory; `.skill` is

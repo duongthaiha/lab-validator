@@ -111,8 +111,8 @@ question, not by reading all five:
 | What commands and options does the CLI provide? | [`docs/cli.md`](docs/cli.md) |
 | How do I run a validation from nothing? | this README, [Running a validation](#running-a-validation) |
 | What do I do *next*, mid-walk? | don't read — ask: `lab-validator next` |
-| Is this observation a defect? Whose? What evidence do I need? | [`skills/lab-validator/references/judgement.md`](skills/lab-validator/references/judgement.md) |
-| What are the steps of a walk, in order? | [`skills/lab-validator/SKILL.md`](skills/lab-validator/SKILL.md) |
+| Is this observation a defect? Whose? What evidence do I need? | [`references/judgement.md`](references/judgement.md) |
+| What are the steps of a walk, in order? | [`SKILL.md`](SKILL.md) |
 | The agent stopped — why? What was it allowed to do? How do I change it? | [`docs/agent.md`](docs/agent.md) |
 | Why is the engine built this way, and what went wrong before? | [`docs/approach.md`](docs/approach.md) |
 
@@ -651,9 +651,9 @@ The executable and the skill are different parts of the same solution:
   follow that engine without bypassing the learner path, and how to decide when
   an observation is a finding.
 
-The skill is packaged in [`skills/lab-validator/`](skills/lab-validator/). Install
-it when you want Copilot to recognize requests such as "validate this lab" and
-drive the CLI workflow directly:
+The repository *is* the skill: `SKILL.md`, `references/` and `assets/` sit at the
+root beside the code they drive. Install it when you want Copilot to recognize
+requests such as "validate this lab" and drive the CLI workflow directly:
 
 ```powershell
 lab-validator install-skill              # copies it to ~/.copilot/skills
@@ -664,17 +664,15 @@ To share the same skill with another Agent Skills-compatible harness, build one
 portable archive:
 
 ```powershell
-lab-validator prepare-skill              # stage runtime under skills\lab-validator
-# inspect skills\lab-validator\runtime before packaging
 lab-validator package-skill
 # dist\lab-validator.skill
 ```
 
-`package-skill` refuses a missing or stale staged runtime, so the visible folder
-is exactly what goes into the archive. The `.skill` file is a ZIP archive with
-`lab-validator/SKILL.md`, its references, and the complete CLI Python runtime
-under one root directory. Import it using
-the receiving harness's skill installer, or extract it into that harness's
+Both commands publish the same curated subset of the repository, so the
+installed copy and the archive are byte-identical and neither can go stale. The
+`.skill` file is a ZIP archive with `lab-validator/SKILL.md`, its references and
+assets, and the complete CLI Python runtime under one root directory. Import it
+using the receiving harness's skill installer, or extract it into that harness's
 skills directory. Then install the bundled runtime:
 
 ```powershell
@@ -732,7 +730,9 @@ docs/solution.md                    concise end-to-end solution architecture
 docs/cli.md                         CLI workflows, commands, options and recovery
 docs/agent.md                       the autonomous walker: stops, limits, changing it
 docs/gapanalysis.md                 learner-facing gaps found in the target lab
-skills/lab-validator/               the agent skill — judgement, taxonomy, traps
+SKILL.md                            the agent skill — the walk, step by step
+references/*.md                     judgement, taxonomy, traps, Skillable mechanics
+assets/gap-analysis-template.md     the shape of the report a walk produces
 targets/<slug>.toml                 per-lab descriptor — data only, no code
 
 scripts/lab_run.py                  start/status/report a validation run
@@ -744,6 +744,7 @@ scripts/browser_session.py          attach to a signed-in browser; recon command
 scripts/lab_drive.py                drive a running lab: instructions, creds, VM
 scripts/bootstrap_auth.py           fallback: sign-in → encrypted session
 scripts/agent_smoke.py              exercise the agent's SDK wiring with no lab
+scripts/install_runtime.py          install the CLI from an extracted skill archive
 
 src/lab_validator/cli.py            `lab-validator` front door; the walk command
 src/lab_validator/walkloop.py       what to do next, and the refusals that matter

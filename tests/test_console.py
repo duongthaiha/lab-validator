@@ -615,7 +615,7 @@ def _quoted_notice() -> str:
     console.py, and a copy is free to drift the moment the original is
     reworded -- leaving the agent looking for words it will never be sent.
     """
-    doc = Path(__file__).resolve().parents[1] / "skills" / "lab-validator" / "SKILL.md"
+    doc = Path(__file__).resolve().parents[1] / "SKILL.md"
     text = doc.read_text(encoding="utf-8")
     marker = "NOTHING YOU HAVE DONE"
     start = text.index(marker)
@@ -664,7 +664,7 @@ def test_the_skill_says_the_still_screen_is_not_a_finding():
     harness problem being filed as a defect in the lab -- which is the mistake
     the whole module exists because of.
     """
-    doc = Path(__file__).resolve().parents[1] / "skills" / "lab-validator" / "SKILL.md"
+    doc = Path(__file__).resolve().parents[1] / "SKILL.md"
     text = doc.read_text(encoding="utf-8")
     start = text.index("NOTHING YOU HAVE DONE")
     section = text[start : text.index("\n## ", start)].lower()

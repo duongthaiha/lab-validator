@@ -91,23 +91,21 @@ or browser interruption.
 
 ### The skill can enter the solution in two ways
 
-1. **Installed skill.** `lab-validator install-skill` copies
-   `skills/lab-validator` to the Copilot skills directory. A user can then ask
+1. **Installed skill.** `lab-validator install-skill` copies the skill to the
+   Copilot skills directory. A user can then ask
    Copilot to validate a lab; `SKILL.md` teaches it the CLI workflow and the
    judgement rules. The repository copy remains the versioned source of truth.
 2. **Repository-local autonomous skill.** `lab-validator auto` creates a Copilot
-   SDK session with `skills/lab-validator` in `skill_directories`. It does not
+   SDK session with the repository root in `skill_directories`. It does not
    require the separately installed copy. The same skill guides judgement, but
    Python drives the loop and exposes only the five allowed tools.
 
 For transfer to another Agent Skills-compatible harness,
-`lab-validator prepare-skill` first stages the CLI source, delegated scripts,
-packaging metadata, and target descriptors under the inspectable
-`skills/lab-validator/runtime` directory. `package-skill` refuses if that staged
-copy is stale, then creates a deterministic archive from the visible skill tree.
-Its bundled
+`lab-validator package-skill` writes a deterministic archive from the same
+curated file list `install-skill` uses — `SKILL.md`, references, assets, the CLI
+source, delegated scripts, packaging metadata and target descriptors. Its bundled
 `scripts/install_runtime.py` installs the CLI and browser dependencies after
-extraction; secrets, browser profiles, and run evidence are excluded.
+extraction; secrets, browser profiles, tests, docs and run evidence are excluded.
 
 Under `auto`, those tools shell out to the real CLI:
 

@@ -832,15 +832,7 @@ async def run_agent(
                 session_id=f"labwalk-{run.dir.name}",
                 tools=build_tools(tools),
                 hooks=build_hooks(redactor),
-                skill_directories=[
-                    str(
-                        ROOT / "skills" / "lab-validator"
-                        if (ROOT / "skills" / "lab-validator").is_dir()
-                        else ROOT.parent
-                        if ROOT.name == "runtime" and (ROOT.parent / "SKILL.md").is_file()
-                        else ROOT
-                    )
-                ],
+                skill_directories=[str(ROOT)],
                 infinite_sessions={"enabled": True},
                 working_directory=str(ROOT),
                 on_permission_request=lambda request: {"approved": True},

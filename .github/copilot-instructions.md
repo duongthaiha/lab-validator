@@ -17,7 +17,7 @@ Two faces over one engine:
 | Face | What it is | Lives in |
 |---|---|---|
 | **CLI** | The execution engine. Drives the browser, records the trace, renders reports. | `src/lab_validator/`, `scripts/` |
-| **Agent skill** | The judgement layer. Tells a model *how* to walk a lab and *what counts* as a finding. | `skills/lab-validator/` |
+| **Agent skill** | The judgement layer. Tells a model *how* to walk a lab and *what counts* as a finding. | `SKILL.md`, `references/`, `assets/` |
 
 The skill never re-implements the CLI — it calls it. Keep that boundary.
 
@@ -47,7 +47,9 @@ it is wrong — fix the test, not the environment.
 ```
 src/lab_validator/     the engine (cli, walkloop, report, runlog, browser, agent, …)
 scripts/lab_*.py       operator-facing shims; each keeps its own main()
-skills/lab-validator/  SKILL.md + references/ + assets/ + scripts/ + runtime/
+SKILL.md               the skill body — this repository *is* the skill
+references/*.md        loaded into a model's context on demand
+assets/                the gap-analysis output template
 tests/                 pytest; one file per module, all offline
 targets/*.toml         lab descriptors
 docs/                  approach.md (the reasoning), solution.md, cli.md, agent.md
@@ -63,28 +65,26 @@ list anywhere rots it silently.
 
 These will fail on you if you skip them. They are not noise.
 
-**Editing anything under `skills/lab-validator/`** → re-install, or
+**Editing `SKILL.md`, `references/`, `assets/`, `src/`, `scripts/` or
+`pyproject.toml`** → re-install, or
 `test_the_installed_copy_has_not_drifted_from_the_repo` fails:
 
 ```powershell
 python -m lab_validator.cli install-skill
 ```
 
-**Editing anything under `src/`, `scripts/` or `pyproject.toml`** → re-stage the
-bundled runtime, or the packaging tests fail:
+The repository *is* the skill. `install-skill` and `package-skill` are two
+writers over one curated file list — `_skill_files()` in `cli.py` — so the
+installed copy, the archive and the repo cannot disagree about what the skill
+contains. There is no staging step to keep fresh.
 
-```powershell
-python -m lab_validator.cli prepare-skill    # then install-skill
-```
-
-`prepare-skill` stages a clean copy into `skills/lab-validator/runtime/` for
-inspection; `package-skill` zips the visible skill tree and **refuses** if the
-staging is stale or contains generated files (`__pycache__/`, `*.egg-info/`,
-`.ruff_cache/`). Never hand-edit `runtime/` — it is output. If a test reports
-unexpected files in there, some tool wrote into the staged tree: delete them and
-re-run `prepare-skill`. (`runtime/` has its own `pyproject.toml`, so tools that
-walk for project roots will happily treat it as a second project — ruff is
-excluded from it for exactly this reason.)
+The list is explicit rather than "everything here", because the flip side of
+publishing straight from the repo is **over-inclusion**: a careless glob ships
+`tests/`, `docs/` or whatever a tool has just written into the working tree, and
+an archive full of the wrong files still extracts and loads perfectly well.
+`test_the_package_ships_nothing_the_repository_only_needs` is the guard. Adding
+a new runtime file means adding it to `SKILL_CONTENTS` or `SKILL_SCRIPTS`, and
+`install-skill --dry-run` shows exactly what would be published.
 
 **`SKILL.md` has a hard 500-line budget** (progressive disclosure).
 It currently sits around 495. Adding a section means moving one out to
@@ -111,13 +111,13 @@ package. If you change its frontmatter or structure, re-validate:
 
 ```powershell
 pip install skills-ref            # installs a console script named `agentskills`
-agentskills validate skills\lab-validator
+agentskills validate C:\Git\lab-validator   # needs an absolute path, not `.`
 ```
 
 ## The report is the product
 
 `src/lab_validator/report.py` renders the gap analysis, and
-`skills/lab-validator/assets/gap-analysis-template.md` is the template that
+`assets/gap-analysis-template.md` is the template that
 documents that output. **They must not drift.** Change the renderer and you
 change the template in the same commit, and vice versa.
 

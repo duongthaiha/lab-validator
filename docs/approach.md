@@ -645,7 +645,7 @@ an answer rather than a hope.
 
 ### 2.13 Documentation an agent executes is code, and needs the same guards
 
-The skill in `skills/lab-validator/` is not prose about the tool; it is a set of commands
+The skill in `SKILL.md` is not prose about the tool; it is a set of commands
 an agent will run **literally and at speed**. A renamed flag in it does not produce a
 helpful error — it produces a run that dies partway through a lab with a human waiting.
 Writing it surfaced one immediately: it documented `--instruction-ref` where the real flag

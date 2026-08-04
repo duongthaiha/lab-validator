@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Install the CLI runtime bundled inside the portable skill archive."""
+"""Install the lab-validator CLI that ships alongside this skill.
+
+Works identically from a clone and from an extracted `.skill` archive, because
+in both cases the skill root is the project root -- that is the point of the
+repository *being* the skill.
+"""
 
 from __future__ import annotations
 
@@ -26,14 +31,10 @@ def main() -> int:
     args = parser.parse_args()
 
     skill_root = Path(__file__).resolve().parents[1]
-    runtime = skill_root / "runtime"
-    if not (runtime / "pyproject.toml").is_file():
-        parser.error(
-            "this skill has no prepared runtime; run `lab-validator prepare-skill` "
-            "in the source checkout before packaging"
-        )
+    if not (skill_root / "pyproject.toml").is_file():
+        parser.error(f"{skill_root} does not look like a lab-validator skill: no pyproject.toml")
 
-    target = str(runtime) + ("" if args.without_agent else "[agent]")
+    target = str(skill_root) + ("" if args.without_agent else "[agent]")
     subprocess.run(
         [sys.executable, "-m", "pip", "install", "-e", target],
         check=True,
