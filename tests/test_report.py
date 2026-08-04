@@ -264,6 +264,36 @@ def test_findings_are_routed_to_the_owner_who_can_fix_them(tmp_path):
     )
 
 
+def test_the_run_report_groups_findings_lab_by_lab(tmp_path):
+    """Whoever owns one lab should not have to read every other lab's findings.
+
+    The flat severity-ordered list is still there underneath -- numbering is
+    global so a finding keeps its number in the routing block, the summary
+    table and its own heading -- but the bodies are filed under the lab that
+    has to be fixed.
+    """
+    run = make_run(tmp_path)
+    run.step("s00", verdict="LAB009", severity="critical", domain="setup",
+             note="the shipped key is expired")
+    run.step("s01", verdict="LAB003", severity="major", domain="instruction",
+             note="the blade was renamed")
+    text = render(run)
+
+    assert "### Required Lab Setup" in text, "the module title is the lab"
+    assert "### Lab 01" in text, "a section with no module is its own lab"
+    assert "#### 1." in text and "#### 2." in text
+
+    assert "| ID | Sev | Lab | Gap |" in text
+    findings = text.split("## Findings")[1]
+    assert findings.index("### Required Lab Setup") < findings.index("### Lab 01"), (
+        "labs follow the severity order of their first finding"
+    )
+    assert (
+        findings.index("the shipped key is expired")
+        < findings.index("### Lab 01")
+    ), "a finding's body sits under its own lab"
+
+
 def test_an_unattributed_finding_says_so_rather_than_guessing(tmp_path):
     run = make_run(tmp_path)
     run.step("s00", verdict="LAB002", severity="major", note="no such resource group")

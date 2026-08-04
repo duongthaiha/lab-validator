@@ -664,17 +664,27 @@ To share the same skill with another Agent Skills-compatible harness, build one
 portable archive:
 
 ```powershell
+lab-validator prepare-skill              # stage runtime under skills\lab-validator
+# inspect skills\lab-validator\runtime before packaging
 lab-validator package-skill
 # dist\lab-validator.skill
 ```
 
-The `.skill` file is a ZIP archive with `lab-validator/SKILL.md` and all reference
-files under one root directory. Import it using the receiving harness's skill
-installer, or extract it into that harness's skills directory. The package is
-instructions and references, not a standalone executable: the target machine
-must also have this repository's `lab-validator` CLI and browser dependencies
-installed. A SHA-256 digest is printed when the package is built so the file can
-be verified after transfer.
+`package-skill` refuses a missing or stale staged runtime, so the visible folder
+is exactly what goes into the archive. The `.skill` file is a ZIP archive with
+`lab-validator/SKILL.md`, its references, and the complete CLI Python runtime
+under one root directory. Import it using
+the receiving harness's skill installer, or extract it into that harness's
+skills directory. Then install the bundled runtime:
+
+```powershell
+python <skills-dir>\lab-validator\scripts\install_runtime.py
+```
+
+That installs the CLI, agent extra, and Playwright Chromium. Use
+`--without-agent` or `--skip-browser` for a smaller manual-only setup. Browser
+profiles, credentials, and run evidence are never bundled. A SHA-256 digest is
+printed when the package is built so the file can be verified after transfer.
 
 `lab-validator auto` does not depend on that installed copy. It starts a Copilot
 SDK session and loads the repository skill directly, then exposes only five

@@ -164,6 +164,18 @@ def test_no_reference_file_is_orphaned():
         assert path.name in body, f"references/{path.name} is never referenced from SKILL.md"
 
 
+def test_every_referenced_asset_file_is_present():
+    body = SKILL.read_text(encoding="utf-8")
+    for name in set(re.findall(r"assets/([a-z-]+\.md)", body)):
+        assert (SKILL.parent / "assets" / name).exists(), f"assets/{name} is missing"
+
+
+def test_no_asset_file_is_orphaned():
+    body = SKILL.read_text(encoding="utf-8")
+    for path in (SKILL.parent / "assets").glob("*"):
+        assert path.name in body, f"assets/{path.name} is never referenced from SKILL.md"
+
+
 def test_the_skill_stays_within_the_progressive_disclosure_budget():
     """Past ~500 lines the body stops being something an agent reads and starts
     being something it skims."""

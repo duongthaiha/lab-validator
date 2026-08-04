@@ -27,8 +27,9 @@ copilot
 The package entry point is `lab_validator.cli:main`. It provides one command
 surface over two implementation styles:
 
-- `walk`, `auto`, `scope`, `next`, `debug`, `install-skill`, and `package-skill`
-  are orchestration commands implemented in `src/lab_validator/cli.py`;
+- `walk`, `auto`, `scope`, `next`, `debug`, `install-skill`, `prepare-skill`,
+  and `package-skill` are orchestration commands implemented in
+  `src/lab_validator/cli.py`;
 - `run`, `step`, `text`, `corpus`, `discover`, `drive`, `session`, and `auth`
   delegate to the established scripts under `scripts/`.
 
@@ -103,6 +104,7 @@ or discard recorded evidence.
 | `session` | Create/attach browser profiles and inspect tabs |
 | `auth` | Manage the encrypted storage-state fallback |
 | `install-skill` | Install the repository's judgement skill for Copilot |
+| `prepare-skill` | Stage the CLI runtime inside the skill directory for inspection |
 | `package-skill` | Build one portable `.skill` archive for another agent harness |
 
 ## Primary commands
@@ -307,14 +309,23 @@ evidence validation, and reporting remain enforced by Python.
 ### `package-skill`
 
 ```powershell
+lab-validator prepare-skill
+# inspect skills\lab-validator\runtime
 lab-validator package-skill
 lab-validator package-skill --out <path\lab-validator.skill>
 ```
 
-The default output is `dist\lab-validator.skill`. The command validates the
-frontmatter, progressive-disclosure limit, and referenced files before writing a
-deterministic ZIP-format archive. It prints the archive's SHA-256 digest for
-transfer verification.
+`prepare-skill` recreates `skills\lab-validator\runtime` from the repository's
+CLI source, delegated scripts, packaging metadata, environment template, and
+target descriptors. This is the exact runtime tree intended for distribution,
+so it can be reviewed before an archive is created.
+
+The default package output is `dist\lab-validator.skill`. `package-skill`
+validates the frontmatter, progressive-disclosure limit, referenced files, and
+that the staged runtime still byte-matches the repository. It refuses stale
+content rather than silently replacing what was reviewed. The deterministic
+ZIP-format archive includes the whole visible skill directory and prints its
+SHA-256 digest for transfer verification.
 
 The archive contains one top-level `lab-validator` directory:
 
@@ -322,18 +333,28 @@ The archive contains one top-level `lab-validator` directory:
 lab-validator/
   SKILL.md
   references/
-    judgement.md
-    taxonomy.md
-    skillable-mechanics.md
-    harness-traps.md
+  scripts/
+    install_runtime.py
+  runtime/
+    scripts/lab_*.py
+    src/lab_validator/
+    targets/
+    pyproject.toml
 ```
 
 Use the receiving agent harness's `.skill` import command where available.
 Otherwise, extract the archive into its configured skills directory; `.skill` is
-a ZIP file with a different extension. Harnesses must support the Agent Skills
-`SKILL.md` convention and make the `lab-validator` executable available to skill
-tools. The archive intentionally does not bundle Python, Playwright, browser
-profiles, credentials, or run evidence.
+a ZIP file with a different extension. Then install its bundled runtime:
+
+```powershell
+python <skills-dir>\lab-validator\scripts\install_runtime.py
+```
+
+The installer installs the local Python project with the agent extra and then
+installs Playwright Chromium. Pass `--without-agent` for a manual-only CLI or
+`--skip-browser` when the browser is already provisioned. Python 3.11+ is still
+required. The archive intentionally excludes browser profiles, credentials,
+run evidence, test fixtures, and development tooling.
 
 ## Generated artifacts
 

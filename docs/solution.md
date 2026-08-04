@@ -101,10 +101,13 @@ or browser interruption.
    Python drives the loop and exposes only the five allowed tools.
 
 For transfer to another Agent Skills-compatible harness,
-`lab-validator package-skill` validates the repository source and creates a
-deterministic `.skill` archive containing the complete skill directory. The
-archive is portable guidance, not the execution engine: the receiving
-environment still needs the CLI and its browser dependencies.
+`lab-validator prepare-skill` first stages the CLI source, delegated scripts,
+packaging metadata, and target descriptors under the inspectable
+`skills/lab-validator/runtime` directory. `package-skill` refuses if that staged
+copy is stale, then creates a deterministic archive from the visible skill tree.
+Its bundled
+`scripts/install_runtime.py` installs the CLI and browser dependencies after
+extraction; secrets, browser profiles, and run evidence are excluded.
 
 Under `auto`, those tools shell out to the real CLI:
 

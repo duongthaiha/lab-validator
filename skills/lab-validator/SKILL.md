@@ -1,8 +1,8 @@
 ---
 name: lab-validator
 description: "Walk a hands-on lab (Microsoft Learning Campus / Skillable) as a simulated learner in a real browser, doing what the instructions say, and report every place reality has drifted from the text — retired models, renamed UI, moved features, dead links, defective sample code — and every place the lab environment itself is broken. The human signs in once; the agent does the rest. Triggers: 'validate this lab', 'walk this lab', 'lab gap analysis', 'check whether these lab instructions still work', 'has this lab drifted', 'test this Skillable lab', 'simulate a learner doing this lab'."
+compatibility: Requires Windows, Python 3.11+, browser UI, network access, and a human sign-in.
 ---
-
 # Lab Validator
 
 Drive a browser through a hands-on lab the way a learner would, and produce a
@@ -14,10 +14,7 @@ green. The deliverable is a report someone can act on, and the durable asset is
 the recorded trace of what was observed.
 
 ## When to use
-- A lab is about to be delivered and nobody has walked it since the last product release.
-- A learner or trainer reports "step 12 doesn't work" and you need the full picture.
-- A model, SKU or portal blade was retired and you need to know which labs it breaks.
-- Someone hands you a Learning Campus / Skillable URL and asks "is this still good?"
+- Someone hands you a Learning Campus / Skillable URL and asks "validate this lab"
 
 ## When *not* to use
 - To check a single factual claim ("is `gpt-4-32k` retired?"). Query the Azure
@@ -25,12 +22,12 @@ the recorded trace of what was observed.
 - To fix the lab. This reports; it does not edit lab content.
 
 ## Prerequisites
-- A clone of the `lab-validator` repo, installed: `pip install -e ".[dev]"`.
+- The `lab-validator` CLI: run `python scripts/install_runtime.py` from a portable extraction, or `pip install -e ".[dev]"` from a clone.
 - A browser profile the tooling can attach to (see Step 1). **Edge 136+ refuses
   `--remote-debugging-port` on the default profile**, so a dedicated clone is required.
 - **A human available for exactly one gesture: the sign-in.** It is hardware-bound
   (Windows Hello / FIDO) and deliberately un-automatable. Everything after it is not.
-- The lab URL and the lab's title.
+- The lab URL and title.
 
 ## How this skill reaches you
 
@@ -47,8 +44,8 @@ the walk.
 The nine steps below are the walk. Something has to sequence them, and it is
 either you or `lab-validator auto`.
 
-| | Direct skill/manual CLI | `auto` session |
-|---|---|---|
+|  | Direct skill/manual CLI | `auto` session |
+| --- | --- | --- |
 | Sequencing | you run each command through the CLI | Python runs the loop; a model is asked only to PERFORM or ASSESS |
 | Steps 1–4, 8 | yours | already handled — do not repeat them |
 | Steps 5–7, 9 | yours | **yours, and the reason you are reading this** |
@@ -323,7 +320,7 @@ tasks you believe you did, this is why, and `next` will say so.
 Every finding needs three things (see `references/judgement.md`):
 
 | Field | Question it answers |
-|---|---|
+| --- | --- |
 | `--verdict` | *What kind* of defect — see `references/taxonomy.md` |
 | `--domain` | *Who fixes it* — `instruction`, `setup`, or `undetermined` |
 | `--note` | *Why you believe it* — the evidence, quoted |
@@ -354,10 +351,9 @@ so resuming an interrupted walk is the same command as continuing a live one.
 lab-validator run --report
 ```
 
-Produces `runs/<ts>/gap-analysis.md` plus one report per section. It opens with
-the question that matters — **can a learner complete this lab: yes / no /
-partially** — names the blocking findings, then coverage, then findings grouped
-by who fixes them.
+Produces `runs/<ts>/gap-analysis.md` plus one report per section, following the
+[output template](assets/gap-analysis-template.md): completability, blockers,
+coverage, findings grouped by owner, verified steps, and audit history.
 
 Retract anything that does not survive re-checking:
 
@@ -477,7 +473,7 @@ are in `references/judgement.md`.
 ### Deciding the domain
 
 | Ask | If yes | Domain |
-|---|---|---|
+| --- | --- | --- |
 | Would editing the lab text alone fix this? | the text names a dead model, a renamed blade, a moved menu, a dead link | `instruction` |
 | Would the text be correct if the environment were built properly? | a resource was never provisioned, shipped config is wrong, credentials fail, the image serves something other than it claims | `setup` |
 | Could either be true and you have not distinguished them? | — | `undetermined`, **and name the experiment that would decide** |
@@ -492,7 +488,7 @@ Both read, at first, as five unrelated bugs in five unrelated labs.
 ## Reference files
 
 | File | Contents |
-|---|---|
+| --- | --- |
 | `references/judgement.md` | The full principles, with the incidents that produced them. Platform-agnostic — this is the part that generalises past any one lab platform. |
 | `references/taxonomy.md` | Every verdict code, its domain and severity, and how to choose between neighbours. |
 | `references/skillable-mechanics.md` | Frames, `window.api.v1`, the Resources tab, the lab clock, Launch gating. |

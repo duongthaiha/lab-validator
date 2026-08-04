@@ -55,7 +55,9 @@ def test_install_skill_is_also_implemented_locally():
 
 
 def test_package_skill_is_also_implemented_locally():
+    assert "prepare-skill" not in cli.COMMANDS
     assert "package-skill" not in cli.COMMANDS
+    assert callable(cli.cmd_prepare_skill)
     assert callable(cli.cmd_package_skill)
 
 
@@ -74,7 +76,10 @@ def test_the_help_advertises_the_locally_implemented_commands():
     finally:
         sys.argv = saved
     text = buf.getvalue()
-    assert "walk" in text and "install-skill" in text and "package-skill" in text
+    assert all(
+        command in text
+        for command in ("walk", "install-skill", "prepare-skill", "package-skill")
+    )
 
 
 def test_installing_the_skill_writes_every_file(tmp_path):
@@ -97,16 +102,20 @@ def test_packaging_the_skill_writes_one_portable_archive(tmp_path):
 
     assert cli.cmd_package_skill(args) == 0
 
-    source = cli.ROOT / "skills" / "lab-validator"
-    expected = sorted(
-        f"lab-validator/{path.relative_to(source).as_posix()}"
-        for path in source.rglob("*")
-        if path.is_file()
-    )
     with zipfile.ZipFile(output) as archive:
-        assert sorted(archive.namelist()) == expected
-        assert "lab-validator/SKILL.md" in archive.namelist()
+        names = set(archive.namelist())
+        assert {
+            "lab-validator/SKILL.md",
+            "lab-validator/scripts/install_runtime.py",
+            "lab-validator/runtime/scripts/lab_step.py",
+            "lab-validator/runtime/src/lab_validator/cli.py",
+            "lab-validator/runtime/pyproject.toml",
+            "lab-validator/runtime/targets/azure-ai-platform.toml",
+        } <= names
         assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in archive.infolist())
+        pyproject = archive.read("lab-validator/runtime/pyproject.toml").decode()
+        assert 'lab-validator = "lab_validator.cli:main"' in pyproject
+        assert "readme =" not in pyproject
 
 
 def test_skill_package_is_reproducible(tmp_path):
@@ -129,6 +138,23 @@ def test_skill_package_validation_rejects_a_missing_reference(tmp_path):
 
     with pytest.raises(ValueError, match="references/missing.md"):
         cli._skill_source_files(source)
+
+
+def test_prepared_runtime_matches_the_repository():
+    expected = cli._runtime_entries()
+    runtime = cli.REPO_SKILL / "runtime"
+
+    assert expected
+    assert all(
+        (runtime / Path(relative)).read_bytes() == content
+        for relative, content in expected.items()
+    )
+    actual = {
+        path.relative_to(runtime).as_posix()
+        for path in runtime.rglob("*")
+        if path.is_file()
+    }
+    assert actual == set(expected)
 
 
 def test_the_scripts_directory_is_found_relative_to_the_package():
