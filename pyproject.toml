@@ -44,6 +44,12 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 src = ["src", "scripts"]
+# `skills/lab-validator/runtime/` is a staged *copy* of src/ and scripts/, with
+# its own pyproject.toml. Ruff would treat it as a second project root, lint the
+# same files twice and write a `.ruff_cache/` inside the staged tree -- which
+# then fails `package-skill`, because a generated file has appeared in something
+# that is supposed to be reproducible output.
+extend-exclude = ["skills/lab-validator/runtime"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S"]

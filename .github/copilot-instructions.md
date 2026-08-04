@@ -70,8 +70,8 @@ These will fail on you if you skip them. They are not noise.
 python -m lab_validator.cli install-skill
 ```
 
-**Editing anything under `src/` or `scripts/`** → re-stage the bundled runtime,
-or the packaging tests fail:
+**Editing anything under `src/`, `scripts/` or `pyproject.toml`** → re-stage the
+bundled runtime, or the packaging tests fail:
 
 ```powershell
 python -m lab_validator.cli prepare-skill    # then install-skill
@@ -79,8 +79,12 @@ python -m lab_validator.cli prepare-skill    # then install-skill
 
 `prepare-skill` stages a clean copy into `skills/lab-validator/runtime/` for
 inspection; `package-skill` zips the visible skill tree and **refuses** if the
-staging is stale or contains generated files (`__pycache__/`, `*.egg-info/`).
-Never hand-edit `runtime/` — it is output.
+staging is stale or contains generated files (`__pycache__/`, `*.egg-info/`,
+`.ruff_cache/`). Never hand-edit `runtime/` — it is output. If a test reports
+unexpected files in there, some tool wrote into the staged tree: delete them and
+re-run `prepare-skill`. (`runtime/` has its own `pyproject.toml`, so tools that
+walk for project roots will happily treat it as a second project — ruff is
+excluded from it for exactly this reason.)
 
 **`SKILL.md` has a hard 500-line budget** (progressive disclosure).
 It currently sits around 495. Adding a section means moving one out to
