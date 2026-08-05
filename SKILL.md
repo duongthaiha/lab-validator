@@ -33,32 +33,36 @@ the recorded trace of what was observed.
 
 The CLI owns browser automation, persisted state, evidence, and reports; this
 skill supplies operating and judgement rules. Installed with
-`lab-validator install-skill`, it recognizes a user's validation request and
-drives the commands below. Under `lab-validator auto`, the CLI loads the
-repository skill directly and asks it only for `PERFORM` and `ASSESS` judgement.
-The repository copy is authoritative, and only task-scoped run evidence advances
-the walk.
+`lab-validator install-skill`, or unpacked from `package-skill` into any
+Agent Skills-compatible harness, it recognizes a user's validation request and
+drives the commands below. The repository copy is authoritative, and only
+task-scoped run evidence advances the walk.
 
-## Two ways to drive this, and how to tell which you are
+**You sequence the walk.** `lab-validator next` reads the run folder and says
+which move is due and why; run the command it names, then ask again. The
+refusals live in the CLI: it will not let you advance past a task with no
+verdict.
 
-The nine steps below are the walk. Something has to sequence them, and it is
-either you or `lab-validator auto`.
+## What your harness must guarantee
 
-|  | Direct skill/manual CLI | `auto` session |
-| --- | --- | --- |
-| Sequencing | you run each command through the CLI | Python runs the loop; a model is asked only to PERFORM or ASSESS |
-| Steps 1–4, 8 | yours | already handled — do not repeat them |
-| Steps 5–7, 9 | yours | **yours, and the reason you are reading this** |
+Four rules used to be enforced by a bundled autonomous driver. It is gone, so
+they are yours to honour. The incidents behind them are in
+`references/harness-traps.md` under *The harness contract*.
 
-**If you have no shell, you are inside `auto`.** Tools outside the learner's path
-are denied there — not as a restriction but because a lab you fixed from a
-terminal reports as working while the learner still cannot finish it. Under
-`auto` the sections open, close, report and advance without you; your entire job
-is the judgement in Steps 5–7 and 9. Trying to run the commands in Steps 2, 3, 4
-and 8 will simply be refused.
-
-Either way it is the same persisted loop: the manual path answers `next_move()`
-with CLI commands; `auto` uses five CLI-backed tools while Python owns state.
+1. **Stay on the learner's path.** Act through `step --do` and the documented
+   commands. Do not repair the lab from a shell, the product's API or the file
+   system behind the VM: a lab you fixed reports as working while the learner
+   following the text still cannot finish it. Read-only oracles are fine;
+   anything that *changes* the lab must be a control the learner has.
+2. **Evidence is progress; your transcript is not.** Only a trace record scoped
+   to a task anchor counts. Ask `lab-validator next` after acting — if the
+   outstanding tasks did not change, nothing happened.
+3. **Stop rather than grind.** Three turns that change nothing, the same move
+   returning unchanged, or *Lab Closed*: stop and say so. The run resumes from
+   disk; a stuck loop burns lab clock and writes trace nobody can use.
+4. **Never echo raw output into a prompt.** Credentials are requested by label
+   (`cred:SCOPE/LABEL`) and sign-ins by role (`signin:vm`, `signin:portal`)
+   precisely so no value has to pass through you.
 
 ## Step 1 — Attach to a browser
 
@@ -414,7 +418,7 @@ Any step run against a closed lab now refuses:
    observed from here is evidence about the lab.
 ```
 
-It records one `BLOCKED` step and exits **4**. `auto` stops on it immediately.
+It records one `BLOCKED` step and exits **4**. Stop on it immediately.
 
 **Do not file findings about what you saw after this.** A lab that has ended is
 not a defect in the lab: the instruction pane that will not scroll is dead, not
@@ -424,7 +428,7 @@ already walked keep their reports; **the rest are unknown, not correct.**
 Ask the human to launch the lab again, then resume the same run:
 
 ```powershell
-lab-validator auto --run <run folder>
+lab-validator next --run <run folder>
 ```
 
 ---

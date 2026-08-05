@@ -21,13 +21,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Optional on purpose. Everything except `lab-validator auto` works without a
-# model, and the hand-driven loop is the fallback when the SDK is unavailable or
-# the CLI is not authenticated -- so a missing agent must degrade to "drive it
-# yourself", not break the tool. `agent.AgentUnavailable` says which is missing.
-agent = [
-    "github-copilot-sdk>=1.0.8",
-]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
