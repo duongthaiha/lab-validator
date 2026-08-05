@@ -1,0 +1,119 @@
+{
+  "schema": "lab-validator/run-trace/v1",
+  "target": "WorkshopPLUS - Example AI Platform",
+  "lab": {
+    "id": 10001,
+    "class_id": 200001,
+    "enrollment": 300001,
+    "edition": "Example AI Platform, All Modules (20260101)",
+    "duration_hours": 8,
+    "enrollment_url": "https://example.invalid/ClassEnrollment/300001"
+  },
+  "instance": "00000000-0000-0000-0000-000000000000",
+  "agent": "lab-validator",
+  "startedUtc": "2026-01-01T09:00:00Z",
+  "endedUtc": "2026-01-01T11:12:00Z",
+  "status": "complete",
+  "corpus": {
+    "path": "evals/files/drifted-walk/outline.md",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bytes": 4096,
+    "lines": 120
+  },
+  "segments": [
+    {
+      "id": "s00-create-the-foundry-project",
+      "title": "Create the Foundry project",
+      "module": "Required Lab Setup",
+      "anchor": "#create-the-foundry-project",
+      "start_heading": 4,
+      "end_heading": 16,
+      "status": "complete",
+      "started": "2026-01-01T09:02:00Z",
+      "lab_minutes_at_start": 480,
+      "reported_through": 40
+    },
+    {
+      "id": "s01-deploy-the-models",
+      "title": "Deploy the models",
+      "module": "Required Lab Setup",
+      "anchor": "#deploy-the-models",
+      "start_heading": 17,
+      "end_heading": 29,
+      "status": "complete",
+      "started": "2026-01-01T09:41:00Z",
+      "lab_minutes_at_start": 441,
+      "reported_through": 62
+    },
+    {
+      "id": "s02-run-the-sample-notebook",
+      "title": "Run the sample notebook",
+      "module": "Lab 01 - Foundry",
+      "anchor": "#run-the-sample-notebook",
+      "start_heading": 30,
+      "end_heading": 48,
+      "status": "complete",
+      "started": "2026-01-01T10:29:00Z",
+      "lab_minutes_at_start": 393,
+      "reported_through": 90
+    },
+    {
+      "id": "s03-vector-search",
+      "title": "Vector search over your own data",
+      "module": "Lab 02 - Retrieval",
+      "anchor": "#vector-search-over-your-own-data",
+      "start_heading": 49,
+      "end_heading": 70,
+      "status": "not_selected",
+      "note": "not selected for this run; never attempted"
+    },
+    {
+      "id": "s04-fine-tuning",
+      "title": "Fine tuning",
+      "module": "Lab 02 - Retrieval",
+      "anchor": "#fine-tuning",
+      "start_heading": 71,
+      "end_heading": 92,
+      "status": "not_selected",
+      "note": "not selected for this run; never attempted"
+    }
+  ],
+  "events": [],
+  "targetSlug": "example-ai-platform",
+  "targetEnriched": true,
+  "enrichmentGaps": [],
+  "entryUrl": "https://example.invalid/User/CurrentTraining/300001",
+  "labMinutesAtStart": 480,
+  "structuralAnomalies": [
+    {
+      "code": "LAB006",
+      "severity": "minor",
+      "message": "Section anchor 'fine-tuning' is shared by 2 headings (levels [1, 2]). An in-page link resolves to the level-2 heading, not the section it names."
+    }
+  ],
+  "preflight": {
+    "checks": 2,
+    "failures": [],
+    "unchecked": [
+      "identity of deployed models — a deployment *named* `gpt-4o` may serve something else entirely; this needs a live call, not a name",
+      "shipped config — none was read, so placeholder and wrong-shape values in the lab's own files are unexamined"
+    ]
+  },
+  "selections": [
+    {
+      "chosen": [
+        "s00-create-the-foundry-project",
+        "s01-deploy-the-models",
+        "s02-run-the-sample-notebook"
+      ],
+      "excluded": [
+        "s03-vector-search",
+        "s04-fine-tuning"
+      ],
+      "expression": "0-2",
+      "how": "prompt",
+      "at": "2026-01-01T09:01:00Z",
+      "refused": []
+    }
+  ]
+}

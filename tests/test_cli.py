@@ -135,9 +135,9 @@ def test_the_package_ships_nothing_the_repository_only_needs(tmp_path):
         names = [name.split("/", 1)[1] for name in archive.namelist()]
 
     for name in names:
-        assert not name.startswith(("tests/", "docs/", ".git", ".venv/", "runs/", "dist/")), (
-            f"{name} is repository-only and must not be published"
-        )
+        assert not name.startswith(
+            ("tests/", "docs/", "evals/", ".git", ".venv/", "runs/", "dist/")
+        ), f"{name} is repository-only and must not be published"
         assert "__pycache__" not in name and not name.endswith((".pyc", ".egg-info")), (
             f"{name} is generated and must not be published"
         )

@@ -50,6 +50,7 @@ scripts/lab_*.py       operator-facing shims; each keeps its own main()
 SKILL.md               the skill body — this repository *is* the skill
 references/*.md        loaded into a model's context on demand
 assets/                the gap-analysis output template
+evals/                 skill-quality evals; results go in ../lab-validator-workspace/
 tests/                 pytest; one file per module, all offline
 targets/*.toml         lab descriptors
 docs/                  approach.md (the reasoning), solution.md, cli.md, agent.md
@@ -113,6 +114,28 @@ package. If you change its frontmatter or structure, re-validate:
 pip install skills-ref            # installs a console script named `agentskills`
 agentskills validate C:\Git\lab-validator   # needs an absolute path, not `.`
 ```
+
+## Evaluating the skill
+
+Test cases live in `evals/evals.json`; `evals/README.md` explains the loop.
+Read it before changing `SKILL.md` in any way that alters judgement.
+
+The one thing to understand up front: **evals here never touch a live lab.**
+Not because it would be slow, but because two live runs do not see the same lab
+— environments drift between reservations, and detecting that drift is what
+this tool is *for*. A with/without delta measured across two live runs is partly
+measuring the skill and partly measuring the lab moving underneath it. So the
+input is a recorded walk (`evals/files/drifted-walk/`) with the observations
+already made, identical for every run and every version.
+
+That fixture is synthetic and every trap in it is planted deliberately — a
+transient that must *not* be reported, a deployment whose name and served model
+disagree, a notebook cell green with nothing behind it. `tests/test_evals.py`
+asserts the traps are still there, because a fixture edited down to clean
+observations still parses, still grades, and still reports the skill as working.
+
+`evals/` is repository-only: not published by `install-skill` or
+`package-skill`, and the over-inclusion guard enforces it.
 
 ## The report is the product
 

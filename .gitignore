@@ -196,6 +196,11 @@ runs/
 *.sarif
 !schemas/*.sarif
 
+# Eval results: model-written reports derived from run data, so the same class
+# of material as runs/. The workspace belongs *beside* the repo
+# (../lab-validator-workspace/); this catches it being run in the wrong place.
+lab-validator-workspace/
+
 # Spyder project settings
 .spyderproject
 .spyproject

@@ -12,5 +12,7 @@ Read it before changing anything. The short version:
   repository *is* the skill; there is no staging step.
 - Docs are tested against the code — rename a module or add a CLI flag and you
   must update `README.md`, `SKILL.md` and `docs/agent.md` in the same change.
+- Changing how the skill *judges*? Run the evals — see `evals/README.md`. They
+  need no lab and no browser.
 - Never commit anything under `runs/`, `artifacts/`, `.auth/` or
   `.browser-profile/`; they carry real lab credentials.

@@ -733,6 +733,7 @@ docs/gapanalysis.md                 learner-facing gaps found in the target lab
 SKILL.md                            the agent skill — the walk, step by step
 references/*.md                     judgement, taxonomy, traps, Skillable mechanics
 assets/gap-analysis-template.md     the shape of the report a walk produces
+evals/                              skill quality evals — see evals/README.md
 targets/<slug>.toml                 per-lab descriptor — data only, no code
 
 scripts/lab_run.py                  start/status/report a validation run

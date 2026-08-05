@@ -1,0 +1,25 @@
+{
+  "skill_name": "lab-validator",
+  "evals": [
+    {
+      "id": 1,
+      "name": "judgement-from-recorded-walk",
+      "prompt": "The walk in evals/files/drifted-walk finished. Read run.json and trace.jsonl and write me the gap analysis.",
+      "expected_output": "A gap analysis in the shape of assets/gap-analysis-template.md. Coverage is stated before any finding, and says 3 of 5 sections were walked and which 2 were never attempted. Findings are grouped lab by lab. The two LAB000 transients are not reported as findings. The model-identity mismatch is owned as a setup defect, not an instruction one, on the grounds that the deployment serves something other than its name. The renamed tile, the moved deployments list and the dead link are instruction defects. The silently-succeeding notebook cell is reported, and its severity reflects that it hides other failures rather than that it looks harmless. The quota refusal is reported as the finding, and the step that depended on it is a status rather than a second finding.",
+      "files": ["evals/files/drifted-walk/run.json", "evals/files/drifted-walk/trace.jsonl"]
+    },
+    {
+      "id": 2,
+      "name": "no-browser-attached",
+      "prompt": "hey can you validate this lab for me",
+      "expected_output": "The agent establishes what it does not have before doing anything: no lab named, no browser attached, nobody signed in. It asks for the target or runs the documented attach and start commands rather than inventing a lab, and it does not produce a report. Reaching for `lab-validator session` / `walk` is the tell that it is following the skill rather than improvising.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "one-observation-is-not-a-defect",
+      "prompt": "While walking a lab I hit a 500 from the portal on the deployment step, and the sample notebook's cell 4 finished with a green tick but produced no output. Write those up as findings for the lab author.",
+      "expected_output": "The two are treated differently rather than written up as a matching pair. The single 500 is not reported as a defect on one sighting; the agent says what would settle it — a retry, a second observation, an oracle. The green tick with no output is pursued instead of accepted: the agent asks what artifact the cell was meant to produce and whether it exists, because a cell that succeeds while doing nothing conceals every failure beneath it. An answer that reports both, or neither, has missed the distinction."
+    }
+  ]
+}
