@@ -40,6 +40,7 @@ from lab_validator.console import (  # noqa: E402
     ConsoleWatch,
     DebugLog,
 )
+from lab_validator.corpus import Outline  # noqa: E402
 from lab_validator.imaging import (  # noqa: E402
     QUIET_THRESHOLD,
     save_evidence,
@@ -76,8 +77,6 @@ def refresh_section_report(run: Run, segment_id: str) -> Path | None:
     outline = None
     if OUTLINE.exists():
         try:
-            from lab_validator.corpus import Outline
-
             outline = Outline.load(OUTLINE)
         except Exception:  # noqa: BLE001 - the task headings are a nicety, not the report
             outline = None
@@ -590,6 +589,11 @@ async def main_async(args) -> int:
                 print(exc.args[0], file=sys.stderr)
                 return 2
 
+            problem = check_ref(run, args.ref)
+            if problem:
+                print(problem, file=sys.stderr)
+                return 2
+
             if args.start_segment:
                 run.start_segment(args.segment, await lab.minutes_remaining())
 
@@ -660,6 +664,44 @@ async def main_async(args) -> int:
             await browser.close()
 
 
+def check_ref(run: Run, ref: str | None) -> str | None:
+    """Reject an ``--ref`` that names no heading in this lab's corpus.
+
+    An unresolvable reference is the worst kind of mistake this tool can make,
+    because nothing about it looks wrong: the verdict is written, the note lands
+    in the section report, and only the coverage count -- "1 task(s) unjudged",
+    with no name attached -- ever hints that the judgement vouched for nothing.
+    Observed live: a task titled "Microsoft Foundry - Overview page" has the id
+    ``...foundry---overview-page``, three hyphens for the spaced dash, and the
+    single-hyphen guess was accepted in silence.
+
+    Returns an error message, or ``None`` when the reference is good or cannot
+    be checked (no corpus on disk yet -- absence of evidence must not block a
+    walk that is otherwise working).
+    """
+    if not ref:
+        return None
+    path = run.dir / "outline.json"
+    if not path.exists():
+        return None
+    try:
+        outline = Outline.load(path)
+    except (OSError, ValueError):
+        return None
+    if outline.by_id(ref) is not None:
+        return None
+    lines = [f"--ref {ref} matches no heading in this lab's instructions."]
+    near = outline.suggest(ref)
+    if near:
+        lines.append("Did you mean:")
+        lines.extend(f"  #{i}" for i in near)
+    else:
+        lines.append("List a section's task anchors with: lab-validator text --run <run> "
+                     "--segment <id> --tasks")
+    lines.append("Nothing was recorded. Re-run with the anchor as the corpus spells it.")
+    return "\n".join(lines)
+
+
 def record_only(args, lab_minutes: int | None = None) -> int:
     """Append bookkeeping without requiring a reachable lab.
 
@@ -681,6 +723,11 @@ def record_only(args, lab_minutes: int | None = None) -> int:
         segment = run.resolve_segment(args.segment)
     except KeyError as exc:
         print(exc.args[0], file=sys.stderr)
+        return 2
+
+    problem = check_ref(run, args.ref)
+    if problem:
+        print(problem, file=sys.stderr)
         return 2
 
     if args.start_segment:

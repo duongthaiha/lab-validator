@@ -401,6 +401,18 @@ def test_the_status_line_names_sections_with_unjudged_tasks(tmp_path):
     assert "1 task(s) unjudged" in describe(run, make_outline())
 
 
+def test_the_status_line_names_the_unjudged_task_itself(tmp_path):
+    # A count alone leaves the harness to work out *which* anchor is missing by
+    # reading the corpus by hand, and a mistyped anchor from that exercise is
+    # recorded without complaint. Naming it removes the guess.
+    run = make_run(tmp_path)
+    run.start_segment("s00")
+    scrolled(run, "s00")
+    judge(run, "s00", "task-1")
+
+    assert "task-2" in describe(run, make_outline())
+
+
 # ---- "no tasks" and "could not find the tasks" are different answers ------
 #
 # Both produce an empty task list, so a loop that only counts tasks reports

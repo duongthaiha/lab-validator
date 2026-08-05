@@ -438,6 +438,12 @@ def describe(run: Run, outline: Outline | None = None) -> str:
         elif coverage_kind(seg, outline) == "unresolved":
             note = ", TASKS NOT ENUMERABLE"
         lines.append(f"  {seg.id} {seg.status}{note}")
+        # Naming them, not just counting them. A bare count tells you a section
+        # is incomplete but not which anchor to pass to `step --ref`, and the
+        # obvious way to find out -- reading the anchors back off the corpus by
+        # hand -- is how mistyped references get recorded in the first place.
+        for ref in unjudged:
+            lines.append(f"      unjudged: #{ref}")
     return "\n".join(lines)
 
 

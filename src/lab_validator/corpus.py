@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from .runlog import Segment
@@ -150,6 +151,37 @@ class Outline:
             if h.id == anchor:
                 return h
         return None
+
+    def suggest(self, anchor: str, limit: int = 3) -> list[str]:
+        """Ids closest to one that did not resolve, best match first.
+
+        A mistyped anchor is almost never wild: it is the right heading with a
+        run of punctuation collapsed, because a title like "Foundry - Overview"
+        yields ``foundry---overview`` and the obvious guess is one hyphen. So
+        compare on a punctuation-stripped key first and only fall back to fuzzy
+        similarity, which would otherwise rank an unrelated heading of similar
+        length above the exact heading the caller meant.
+        """
+        anchor = anchor.lstrip("#")
+        if not anchor:
+            return []
+
+        def key(value: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+        wanted = key(anchor)
+        known = list(dict.fromkeys(
+            [h.id for h in self.headings if h.id] + [i for i in self.ids if i]
+        ))
+        exact = [i for i in known if key(i) == wanted]
+        if exact:
+            return exact[:limit]
+        ranked = sorted(
+            known,
+            key=lambda i: SequenceMatcher(None, anchor, i).ratio(),
+            reverse=True,
+        )
+        return [i for i in ranked[:limit] if SequenceMatcher(None, anchor, i).ratio() > 0.5]
 
     def section_by_anchor(self, anchor: str) -> Heading | None:
         """Resolve an anchor to the *section* it names, not merely to an id.
