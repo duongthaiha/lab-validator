@@ -71,11 +71,29 @@ ROLES: dict[str, tuple[str, ...]] = {
 }
 
 #: Labels that identify the two halves of a sign-in, in preference order. A lab
-#: that calls it "User name" or "Login" is naming the same thing.
+#: that calls it "User name" or "Login" is naming the same thing. Every role must
+#: carry all of these or the sign-in is refused.
 ROLE_FIELDS: dict[str, tuple[str, ...]] = {
     "username": ("username", "user name", "user", "login", "account", "email"),
     "password": ("password", "pass", "pwd"),
 }
+
+#: Fields a sign-in may also offer. Kept apart from :data:`ROLE_FIELDS` because
+#: these are not required: demanding one would refuse every lab that issues none.
+#:
+#: A Temporary Access Pass is the case that forced this. Entra increasingly asks
+#: for a TAP straight after the username and never shows a password box unless
+#: the learner finds the "Use your password instead" link. A vault that can only
+#: name ``username`` and ``password`` cannot complete that sign-in at all, so
+#: ``signin:portal`` -- the documented happy path -- was structurally unreachable
+#: on such a lab and had to be worked around with a raw ``cred:`` ref, which is
+#: exactly the by-name guessing the role table exists to prevent.
+ROLE_OPTIONAL_FIELDS: dict[str, tuple[str, ...]] = {
+    "tap": ("tap", "temporary access pass", "temporary access", "access pass"),
+}
+
+#: Every field name ``signin:ROLE/FIELD`` will accept.
+SIGNIN_FIELDS: dict[str, tuple[str, ...]] = {**ROLE_FIELDS, **ROLE_OPTIONAL_FIELDS}
 
 
 def role_of(scope: str) -> str | None:
@@ -220,19 +238,7 @@ class Vault:
                 f"This lab issued no {role!r} credentials. Scopes that did resolve: "
                 f"{known}. Everything handed out: {self.summary() or 'nothing'}"
             )
-        found: dict[str, Credential] = {}
-        for field, words in ROLE_FIELDS.items():
-            for word in words:
-                hits = [c for c in pool if word in c.label.lower()]
-                if len(hits) == 1:
-                    found[field] = hits[0]
-                    break
-                if len(hits) > 1:
-                    raise VaultError(
-                        f"The {role!r} sign-in has {len(hits)} credentials matching "
-                        f"{field!r}: {', '.join(f'{c.scope}/{c.label}' for c in hits)}. "
-                        "Refusing to choose."
-                    )
+        found = self._fields(role, pool)
         missing = [f for f in ROLE_FIELDS if f not in found]
         if missing:
             have = ", ".join(f"{c.scope}/{c.label}" for c in pool)
@@ -241,6 +247,64 @@ class Vault:
                 f"That scope only carries: {have}"
             )
         return found["username"], found["password"]
+
+    def _fields(self, role: str, pool: list[Credential]) -> dict[str, Credential]:
+        """Match every sign-in field this role's credentials carry.
+
+        Optional fields are matched first and then held out of the pool, because
+        the label texts overlap: "Temporary Access Pass" contains "pass", which
+        the password matcher looks for, so resolving passwords first turns a lab
+        that spells out its TAP into "2 credentials matching 'password'" and
+        refuses the whole sign-in.
+        """
+        found: dict[str, Credential] = {}
+        for table, remaining in (
+            (ROLE_OPTIONAL_FIELDS, pool),
+            (ROLE_FIELDS, None),
+        ):
+            candidates = remaining if remaining is not None else [
+                c for c in pool if c not in found.values()
+            ]
+            for field, words in table.items():
+                for word in words:
+                    hits = [c for c in candidates if word in c.label.lower()]
+                    if len(hits) == 1:
+                        found[field] = hits[0]
+                        break
+                    if len(hits) > 1:
+                        raise VaultError(
+                            f"The {role!r} sign-in has {len(hits)} credentials matching "
+                            f"{field!r}: {', '.join(f'{c.scope}/{c.label}' for c in hits)}. "
+                            "Refusing to choose."
+                        )
+        return found
+
+    def signin_field(self, role: str, field: str) -> Credential:
+        """One named half of a sign-in, resolved through the role table.
+
+        ``username`` and ``password`` come from :meth:`signin` so the pair is
+        still validated together -- half a pair typed into a login box is the
+        failure that method exists to prevent. Optional fields are looked up on
+        their own, because a lab that issues no TAP must still be able to sign
+        in with a password.
+        """
+        if field in ROLE_FIELDS:
+            username, password = self.signin(role)
+            return username if field == "username" else password
+        if field not in ROLE_OPTIONAL_FIELDS:
+            raise VaultError(
+                f"Unknown sign-in field {field!r}. Known: {', '.join(sorted(SIGNIN_FIELDS))}"
+            )
+        if role not in ROLES:
+            raise VaultError(f"Unknown sign-in {role!r}. Known: {', '.join(sorted(ROLES))}")
+        pool = self.roles().get(role) or []
+        match = self._fields(role, pool).get(field) if pool else None
+        if match is None:
+            have = ", ".join(f"{c.scope}/{c.label}" for c in pool) or "nothing"
+            raise VaultError(
+                f"The {role!r} sign-in has no {field!r}. That scope carries: {have}"
+            )
+        return match
 
     def value(self, ref: str) -> str:
         """Resolve ``"Scope/Label"`` or ``"Label"`` to the verbatim secret.
@@ -256,9 +320,8 @@ class Vault:
         # because "portal" is also a substring of "Azure Portal" and a ref that
         # sometimes means the role and sometimes means the scope would be worse
         # than either.
-        if scope.lower() in ROLES and label.lower() in ROLE_FIELDS:
-            username, password = self.signin(scope.lower())
-            return username.value if label.lower() == "username" else password.value
+        if scope.lower() in ROLES and label.lower() in SIGNIN_FIELDS:
+            return self.signin_field(scope.lower(), label.lower()).value
         match = self.find(label, scope or None)
         if match is not None:
             return match.value

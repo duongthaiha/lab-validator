@@ -54,7 +54,7 @@ from lab_validator.labclient import (  # noqa: E402
 from lab_validator.learnerpath import Ledger
 from lab_validator.report import write_segment  # noqa: E402
 from lab_validator.runlog import DOMAINS, FINDING_VERDICTS, Run  # noqa: E402
-from lab_validator.vault import ROLE_FIELDS, Vault, VaultError  # noqa: E402
+from lab_validator.vault import SIGNIN_FIELDS, Vault, VaultError  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS = ROOT / "runs"
@@ -93,10 +93,22 @@ Actions (repeat --do; they run in the order given):
   click:X,Y          click the VM at VM-pixel coordinates
   dblclick:X,Y       double-click
   move:X,Y           move the pointer without clicking
+  scroll:X,Y[,DELTA]  wheel the VM at those coordinates (default 400). This
+                     scrolls *inside the VM*; use read for the instruction pane.
   focus              click the centre of the VM to give it keyboard focus
   type:TEXT          send text to the VM (settle time scales with length)
   cred:SCOPE/LABEL   send a Resources-tab credential without printing it
-  key:A+B            press keys, e.g. key:Enter  key:Control+s
+  signin:ROLE[/FIELD]  sign in by role, never by credential name: ROLE is vm or
+                     portal, FIELD is password (default), username, or tap for a
+                     Temporary Access Pass where the lab issues one. The lab
+                     issues several passwords and more than one is called
+                     "Password"; naming the login picks the right one. signin:vm
+                     must come before signin:portal — the portal sign-in types
+                     into a VM nothing has unlocked yet.
+  key:A+B            press keys, e.g. key:Enter  key:Control+s  key:Alt+ArrowLeft
+                     Playwright key names, not Windows ones: Control/Alt/Shift/
+                     Meta, and ArrowLeft/ArrowRight/ArrowUp/ArrowDown. "alt+Left"
+                     is rejected outright rather than guessed at.
   wait:MS            fixed pause
   until:PROBE[:SEC]  poll until PROBE matches, default budget 300s
   shot[:LABEL]       capture the VM screen as evidence
@@ -307,8 +319,8 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
     """
     role, _, field = arg.partition("/")
     role, field = role.strip().lower(), (field.strip().lower() or "password")
-    if field not in ROLE_FIELDS:
-        raise Stop(f"signin field must be one of {sorted(ROLE_FIELDS)}, not {field!r}")
+    if field not in SIGNIN_FIELDS:
+        raise Stop(f"signin field must be one of {sorted(SIGNIN_FIELDS)}, not {field!r}")
 
     # The ordering guard. Read from the trace rather than kept in memory so a
     # resumed run inherits it: `auto --run <folder>` rebuilds everything else
@@ -335,7 +347,7 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
             "tab is read at launch, or type the fields with cred: refs."
         )
     try:
-        username, password = vault.signin(role)
+        chosen = vault.signin_field(role, field)
     except VaultError as exc:
         raise Stop(f"signin:{arg} refused: {exc}") from exc
 
@@ -343,7 +355,6 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
     # credential it holds. Masking at the boundary rather than at each use is
     # the point -- a second copy of the rule here would be the thing that gets
     # forgotten in the next function that types a secret.
-    chosen = username if field == "username" else password
 
     before = await lab.screen_bytes()
     await lab.type(chosen.value)

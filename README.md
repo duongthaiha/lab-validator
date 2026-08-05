@@ -74,7 +74,9 @@ walk**, because validating 23 sections takes hours:
 Which sections should I walk?  'all' | '4' | '1,4,7' | '4-6' | '?' to re-print the review  [Enter = all]
 ```
 
-Pass `--sections 4-6` to skip the prompt entirely.
+Pass `--sections 4-6` to skip the prompt entirely — that is you making the
+choice. An agent driving this must not: `SKILL.md` Step 4 requires it to show
+you what was captured and wait for your selection.
 The report lands at `runs/<timestamp>/gap-analysis.md`, and is rewritten after
 every step — a run you interrupt is still a run you can read.
 

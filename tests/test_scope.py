@@ -419,13 +419,64 @@ def test_a_terminal_is_asked_and_its_answer_is_recorded_as_a_choice(tmp_path):
     assert applied.selection.chosen == ("s01-lab-01",)
 
 
-def test_pressing_enter_means_everything_but_still_counts_as_a_choice(tmp_path):
+def test_pressing_enter_is_silence_not_a_choice_of_everything(tmp_path, capsys):
+    """A bare Enter is the least deliberate keystroke available, and it used to
+    commit the most expensive outcome this tool has -- every section of a live
+    lab -- filed as though a human had chosen it. Observed live: the prompt took
+    an empty stdin and selected all 23 sections of a 96-hour lab."""
     run, outline = make_run(tmp_path)
+
+    with pytest.raises(scope.ScopeError) as exc:
+        scope.select(
+            run, None, outline=outline, interactive=True, reader=lambda _: ""
+        )
+
+    assert "nobody answered" in str(exc.value)
+    assert "--sections all" in str(exc.value), "a refusal has to name the way back"
+    assert "Say 'all' if you mean all" in capsys.readouterr().out
+
+
+def test_a_reader_that_never_answers_does_not_spin_forever(tmp_path):
+    """`input()` raises at a real EOF, but a piped or stubbed reader can return
+    "" on every call. An unbounded re-ask would hang holding a live lab open."""
+    calls = []
+
+    def silent(_):
+        calls.append(1)
+        return ""
+
+    run, outline = make_run(tmp_path)
+    with pytest.raises(scope.ScopeError):
+        scope.select(run, None, outline=outline, interactive=True, reader=silent)
+
+    assert len(calls) <= scope.BLANK_ANSWER_LIMIT
+
+
+def test_end_of_input_at_the_prompt_is_refused_not_defaulted(tmp_path):
+    """A terminal was detected but nobody is behind it -- an agent harness, a
+    pipe, a CI job. That is not a mandate to walk the whole lab."""
+    run, outline = make_run(tmp_path)
+
+    def eof(_):
+        raise EOFError
+
+    with pytest.raises(scope.ScopeError) as exc:
+        scope.select(run, None, outline=outline, interactive=True, reader=eof)
+
+    assert "nobody answered" in str(exc.value)
+
+
+def test_a_typo_then_a_real_answer_still_lands(tmp_path):
+    """Refusing silence must not make the prompt brittle about typos: only
+    consecutive blanks count, so a mistake followed by an answer works."""
+    run, outline = make_run(tmp_path)
+    answers = iter(["", "s99", "", "s01"])
+
     applied = scope.select(
-        run, None, outline=outline, interactive=True, reader=lambda _: ""
+        run, None, outline=outline, interactive=True, reader=lambda _: next(answers)
     )
-    assert applied.selection.how == "prompt"
-    assert applied.not_selected_now == ()
+
+    assert applied.selection.chosen == ("s01-lab-01",)
 
 
 def test_a_bad_answer_is_re_asked_rather_than_fatal(tmp_path, capsys):

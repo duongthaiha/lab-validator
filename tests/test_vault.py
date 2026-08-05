@@ -270,6 +270,58 @@ def test_an_unknown_sign_in_names_the_ones_that_exist():
         Vault.capture(TWO_SIGNINS).signin("database")
 
 
+# ---- Temporary Access Pass ------------------------------------------------
+#
+# Entra increasingly asks for a TAP straight after the username and never shows
+# a password box unless the learner finds "Use your password instead". A vault
+# that can only name `username` and `password` cannot complete that sign-in at
+# all: observed live, `signin:portal` was structurally unreachable on a lab whose
+# resources pane issued Username, Password *and* TAP.
+
+WITH_TAP = [
+    Credential("Azure Portal", "Username", "learner@labtenant.onmicrosoft.com"),
+    Credential("Azure Portal", "Password", "P0rtalSecret!23"),
+    Credential("Azure Portal", "TAP", "TAPvalue012345"),
+]
+
+
+def test_a_temporary_access_pass_can_be_requested_by_role():
+    assert Vault.capture(WITH_TAP).value("portal/tap") == "TAPvalue012345"
+
+
+def test_a_tap_does_not_displace_the_password():
+    """Both are reachable: the lab offers a choice and so must the vault."""
+    vault = Vault.capture(WITH_TAP)
+    assert vault.value("portal/password") == "P0rtalSecret!23"
+    assert vault.signin_field("portal", "username").value.startswith("learner@")
+
+
+def test_a_spelled_out_tap_does_not_collide_with_the_password():
+    """"Temporary Access Pass" contains "pass", which the password matcher looks
+    for. Resolving passwords first turned such a lab into "2 credentials matching
+    'password'" and refused the whole sign-in."""
+    vault = Vault.capture([
+        Credential("Azure Portal", "Username", "learner@labtenant.onmicrosoft.com"),
+        Credential("Azure Portal", "Password", "P0rtalSecret!23"),
+        Credential("Azure Portal", "Temporary Access Pass", "TAPvalue012345"),
+    ])
+    assert vault.value("portal/password") == "P0rtalSecret!23"
+    assert vault.value("portal/tap") == "TAPvalue012345"
+
+
+def test_a_lab_that_issues_no_tap_still_signs_in():
+    """Making the TAP required would refuse every lab that does not use one."""
+    vault = Vault.capture(TWO_SIGNINS)
+    assert vault.value("portal/password") == "P0rtalSecret!23"
+    with pytest.raises(VaultError, match="no 'tap'"):
+        vault.signin_field("portal", "tap")
+
+
+def test_an_unknown_sign_in_field_names_the_ones_that_exist():
+    with pytest.raises(VaultError, match="Unknown sign-in field"):
+        Vault.capture(WITH_TAP).signin_field("portal", "pin")
+
+
 def test_load_primes_the_redactor_it_is_given(tmp_path):
     """The resumed-run guarantee, asserted directly.
 

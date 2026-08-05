@@ -40,16 +40,43 @@ from lab_validator.labclient import (  # noqa: E402
 )
 
 
-def scrolled(before=0, after=0, overflow=1000, where="div#pane", view_changed=False):
+def scrolled(before=0, after=0, overflow=1000, where="div#pane", view_changed=False,
+             delta=600):
     return Scrolled(before=before, after=after, overflow=overflow,
-                    where=where, view_changed=view_changed)
+                    where=where, view_changed=view_changed, delta=delta)
 
 
-# --- the three outcomes, which an int could only tell as two ---------------
+# --- the four outcomes, which an int could only tell as two ----------------
 
 
 def test_a_pane_that_will_not_move_is_the_defect():
     assert scrolled(before=0, after=0, overflow=21033).stuck
+
+
+def test_a_pane_already_at_its_bottom_is_not_a_defect():
+    """Observed live: `div#instructionsContent` at scrollTop 518 with 518px of
+    total travel. The learner had read to the end, the wheel correctly did
+    nothing, and it was filed as "a learner would be stuck". `overflow` is the
+    pane's whole travel, so comparing against it accuses every fully-read
+    section."""
+    finished = scrolled(before=518, after=518, overflow=518)
+    assert finished.scrollable
+    assert finished.at_end
+    assert not finished.stuck
+    assert "stuck" not in finished.describe().lower()
+
+
+def test_content_still_ahead_of_the_learner_is_what_stuck_measures():
+    """Same pane, same total travel -- but stopped halfway. Here the wheel
+    refusing to move really does strand the learner."""
+    assert scrolled(before=259, after=259, overflow=518).stuck
+
+
+def test_scrolling_up_measures_the_content_behind_the_learner():
+    """A negative wheel at the top has nothing to reach; the same wheel from
+    the bottom has the whole pane behind it."""
+    assert not scrolled(before=0, after=0, overflow=518, delta=-600).stuck
+    assert scrolled(before=518, after=518, overflow=518, delta=-600).stuck
 
 
 def test_a_section_short_enough_to_fit_is_not_a_defect():
@@ -113,13 +140,14 @@ def test_nothing_to_scroll_does_not_read_like_a_failure():
     assert "stuck" not in note.lower()
 
 
-def test_the_three_outcomes_do_not_read_the_same():
+def test_the_four_outcomes_do_not_read_the_same():
     notes = {
         scrolled(before=0, after=0, overflow=21033).describe(),
         scrolled(overflow=0).describe(),
         scrolled(before=0, after=600, overflow=21033).describe(),
+        scrolled(before=518, after=518, overflow=518).describe(),
     }
-    assert len(notes) == 3
+    assert len(notes) == 4
 
 
 @pytest.mark.parametrize(

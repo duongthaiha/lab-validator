@@ -109,22 +109,32 @@ SCROLL_SLACK = 4
 class Scrolled:
     """What a learner's scroll of the instruction pane actually did.
 
-    Three outcomes need telling apart and the old ``int`` return could only
+    Four outcomes need telling apart and the old ``int`` return could only
     tell two. A section short enough to fit its pane *cannot* scroll and is not
-    defective; a pane whose content overflows but will not move is the defect
-    worth reporting. Collapsing them files a major finding against every short
-    section in the lab -- which is precisely what the first live run did.
+    defective; a pane already resting at its own bottom has simply been read to
+    the end; a pane whose content overflows *ahead of the learner* but will not
+    move is the defect worth reporting. Collapsing the first into the last
+    files a major finding against every short section in the lab -- which is
+    what the first live run did. Collapsing the second into the last files one
+    against every section the learner finished reading -- which is what the
+    live run after that did.
     """
 
     before: int
     after: int
-    #: how much content sits beyond the scroller's viewport, in pixels
+    #: the scroller's total travel, in pixels -- ``scrollHeight - clientHeight``.
+    #: This is the distance between the top and the bottom of the pane, *not*
+    #: the distance still unread.
     overflow: int
     #: what was measured, so a wrong guess at the scroller shows up in the
     #: evidence instead of hiding inside a verdict
     where: str
     #: whether the text under a fixed point in the pane changed
     view_changed: bool
+    #: which way the wheel was turned. Needed to tell "there is more below and
+    #: the pane refuses to move" from "the learner has read to the end", which
+    #: look identical from offsets alone.
+    delta: int = 600
 
     @property
     def moved(self) -> bool:
@@ -141,20 +151,46 @@ class Scrolled:
         return self.overflow > SCROLL_SLACK
 
     @property
+    def remaining(self) -> int:
+        """Unread pixels in the direction the wheel was actually turned.
+
+        The number that matters is not how tall the pane is but how much of it
+        the learner has not reached yet. Scrolling down, that is everything
+        below the current offset; scrolling up, everything above it.
+        """
+        return self.overflow - self.before if self.delta >= 0 else self.before
+
+    @property
+    def at_end(self) -> bool:
+        """The learner has already reached the far end of the pane."""
+        return self.scrollable and self.remaining <= SCROLL_SLACK
+
+    @property
     def stuck(self) -> bool:
-        """There is more to read, and the learner cannot reach it."""
-        return self.scrollable and not self.moved
+        """There is more to read, and the learner cannot reach it.
+
+        Gated on :attr:`remaining`, not :attr:`overflow`. A pane resting at its
+        own bottom cannot scroll further and is behaving correctly; comparing
+        against total travel instead reported every fully-read section as a
+        defective one.
+        """
+        return self.remaining > SCROLL_SLACK and not self.moved
 
     def describe(self) -> str:
         if self.stuck:
             return (
                 f"instruction pane did not scroll: {self.where} stayed at "
-                f"scrollTop {self.before} with {self.overflow}px of content below "
-                "the fold, and the view did not change. A learner reading this "
-                "section by hand would be stuck."
+                f"scrollTop {self.before} with {self.remaining}px of content "
+                "past the fold, and the view did not change. A learner reading "
+                "this section by hand would be stuck."
             )
         if not self.scrollable:
             return f"nothing to scroll: {self.where} holds no content beyond its viewport"
+        if self.at_end and not self.moved:
+            return (
+                f"{self.where} is already at the end of its {self.overflow}px "
+                "of travel; there is nothing further to read"
+            )
         return (
             f"{self.where} scrolled {self.before} -> {self.after} "
             f"of {self.overflow}px"
@@ -354,6 +390,7 @@ class LabClient:
             overflow=max(first["overflow"], second["overflow"]),
             where=second["where"] or first["where"],
             view_changed=first["seen"] != second["seen"],
+            delta=delta,
         )
 
     async def _wheel_over_scroller(self, pane: Frame, delta: int) -> None:

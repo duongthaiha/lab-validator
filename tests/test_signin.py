@@ -507,3 +507,64 @@ def test_a_cred_ref_on_a_resumed_run_primes_the_redactor(tmp_path):
 
     assert value == secret, "the ref must still resolve"
     assert secret not in run.redactor.scrub(f"leaked {secret}")
+
+
+# --- the action vocabulary ----------------------------------------------------
+#
+# Written after a live walk stopped here: `SKILL.md` Step 6 tells the reader to
+# sign in with `--do signin:vm`, and `lab_step.py --help` did not list a
+# `signin:` action at all. The action worked -- the dispatcher had always
+# handled it -- so nothing failed loudly. It simply read as unsupported to
+# anyone who checked the help first, which is what a careful operator does.
+# `scroll:` was missing the same way.
+#
+# The doc guards in test_skill.py scrape `lab-validator <cmd> --flag`, so a
+# `--do` value drifting from the dispatcher was invisible to all of them.
+
+
+def test_every_action_the_dispatcher_handles_is_in_the_help():
+    """`--help` is the doc nobody has to go looking for, so it drifts first.
+
+    An action missing here is worse than an undocumented feature: the operator
+    concludes the capability is absent and reaches for a bypass instead -- which
+    is exactly the behaviour the learner-path rule exists to prevent.
+    """
+    body = (ROOT / "scripts" / "lab_step.py").read_text(encoding="utf-8")
+    dispatch = body.split("HELP = ", 1)[1].split('"""', 3)[-1]
+    handled = set(re.findall(r'verb (?:==|in) \(?"(\w+)"', dispatch))
+    handled |= {
+        v for group in re.findall(r'verb in \(([^)]+)\)', dispatch)
+        for v in re.findall(r'"(\w+)"', group)
+    }
+
+    documented = set(re.findall(r"^  (\w+)[: \[]", _lab_step().HELP, re.M))
+
+    missing = sorted(handled - documented)
+    assert not missing, (
+        f"lab_step.py handles --do actions its own --help never mentions: {missing}"
+    )
+
+
+def test_the_help_does_not_promise_an_action_that_does_not_exist():
+    """The other direction, and the more dangerous one.
+
+    A documented action that no longer dispatches fails mid-walk, against a
+    running lab clock, with a human waiting.
+    """
+    body = (ROOT / "scripts" / "lab_step.py").read_text(encoding="utf-8")
+    dispatch = body.split("HELP = ", 1)[1].split('"""', 3)[-1]
+    handled = set(re.findall(r'verb (?:==|in) \(?"(\w+)"', dispatch))
+    handled |= {
+        v for group in re.findall(r'verb in \(([^)]+)\)', dispatch)
+        for v in re.findall(r'"(\w+)"', group)
+    }
+
+    documented = set(re.findall(r"^  (\w+)[: \[]", _lab_step().HELP, re.M))
+    # `until` probes are listed in the same indented style but are arguments to
+    # an action, not actions; they are checked by their own tests.
+    probes = {"connected", "quiet"}
+
+    phantom = sorted(documented - handled - probes)
+    assert not phantom, (
+        f"--help offers --do actions the dispatcher does not handle: {phantom}"
+    )

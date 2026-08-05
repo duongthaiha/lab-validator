@@ -115,20 +115,20 @@ config that disagrees with what the Resources tab just issued.
 
 ## Step 4 — Review what was captured, then choose what to walk
 
-The whole lab is expensive: the reference run was 23 sections, 6 217 steps and
-about a day. `walk` therefore stops here — after the instructions are segmented
-and the credentials are captured, before it spends anything — and shows you what
-it got.
+The whole lab is expensive, so `walk` stops here — instructions segmented,
+credentials captured, nothing spent yet — and shows what it got.
+
+**Show the human what was captured and get an explicit selection before walking
+anything.** Put the section table in front of them — number, title, task count —
+with the preflight verdict and any structural anomaly. This is the last gate
+where being wrong is still free; everything after it spends lab clock. Scope
+picked by inference yields a confident report about sections nobody agreed to
+walk, and the reader cannot tell that from the real thing. Silence is not
+approval.
 
 ```powershell
 lab-validator scope --run <run folder>                     # print the review, change nothing
 lab-validator scope --run <run folder> --sections 4-6      # narrow it
-```
-
-Or decide up front and skip the prompt entirely:
-
-```powershell
-lab-validator walk --url "<lab url>" --name "<lab title>" --sections 4-6
 ```
 
 **Type the numbers from the review's `#` column** — `4`, `1,4,7`, `4-6`, or
@@ -136,14 +136,11 @@ lab-validator walk --url "<lab url>" --name "<lab title>" --sections 4-6
 been captured, so on a first run there is nothing else you could type. The
 number printed on a row always selects that row.
 
-Ids work too once you know them (`s04`, or any unambiguous prefix). A range
-*between ids* must be written `s04..s06`: ids contain hyphens
-(`s04-deploy-models`), so `s04-s06` is indistinguishable from an id and is
-refused with a hint. Numbers cannot contain a hyphen, so `4-6` is unambiguous
-and allowed. An unknown or ambiguous id is refused too, naming the real
-candidates. A typo that silently selected nothing — or silently selected a
-*different* section — would be worse than a refusal: it would produce a clean
-report about a lab nobody looked at.
+Ids work too once you know them (`s04`, or an unambiguous prefix), but a range
+*between* ids needs `s04..s06` — ids contain hyphens (`s04-deploy-models`), so
+`s04-s06` is indistinguishable from one. Anything unknown or ambiguous is
+refused by name rather than guessed: a typo that silently selected nothing, or a
+different section, would produce a clean report about a lab nobody looked at.
 
 **What to select.** Scope to the sections the question is actually about:
 
@@ -262,21 +259,24 @@ lab-validator step --segment s04 --label vm-signin `
 | `signin:vm` | the machine's own login — a Windows lock screen, an RDP prompt |
 | `signin:portal` | a cloud sign-in — Azure, Entra, Microsoft 365 |
 | `signin:portal/username` | the account page that precedes the password page |
+| `signin:portal/tap` | *Enter Temporary Access Pass* — where the lab issues one |
 
 `signin:ROLE` types the **password** by default, because both flows end at a
-password box. Add `/username` for the account field.
+password box. Add `/username` for the account field. Entra often demands a
+**Temporary Access Pass** right after the username, offering a password only
+behind a *Use your password instead* link; `signin:portal/tap` matches that
+screen wherever the lab issues one.
 
 Judge the login from **what you can see**, not from what the task says you are
-doing. A step titled "Sign in to the Azure portal" begins on the VM's lock
-screen if the VM is locked, and the correct first move is `signin:vm`. The tool
-resolves the credential from the lab's own scopes; if two could match, it
-refuses and names them — supply the role it could not work out, never a
-credential.
+doing. A step titled "Sign in to the Azure portal" begins on the VM's lock screen
+if the VM is locked, and the correct first move is `signin:vm`. The tool resolves
+the credential from the lab's own scopes; if two could match, it refuses and
+names them — supply the role it could not work out, never a credential.
 
-**The VM login always comes first.** Everything you can reach — browser,
-portal, terminal — is inside the VM, so `signin:portal` is refused until
-`signin:vm` has run. Nothing is typed by a refused sign-in. Do not work around
-it by typing the password another way; go and unlock the machine.
+**The VM login always comes first.** Everything you can reach — browser, portal,
+terminal — is inside the VM, so `signin:portal` is refused until `signin:vm` has
+run. Nothing is typed by a refused sign-in. Do not work around it by typing the
+password another way; go and unlock the machine.
 
 **A sign-in reports `DEFERRED`, never `PASS` — so read the screen afterwards.**
 Not caution: on a Windows console an accepted sign-in and a rejected one are

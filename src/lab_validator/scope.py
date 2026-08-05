@@ -484,8 +484,26 @@ def not_selected_ids(run: Run) -> list[str]:
 PROMPT = "sections> "
 PROMPT_HELP = (
     "Which sections should I walk?  'all' | '4' | '1,4,7' | '4-6' | '?' to "
-    "re-print the review  [Enter = all]"
+    "re-print the review"
 )
+
+#: How many silent answers to absorb before concluding nobody is there.
+BLANK_ANSWER_LIMIT = 3
+
+
+def _nobody_answered(run: Run) -> ScopeError:
+    """Refuse a scope nobody chose, and name the way back.
+
+    Walking everything was the old fallback here, and it is the wrong one: it
+    commits hours of a live lab's clock to sections nobody asked for, and files
+    it as a decision. Everything captured is already on disk, so refusing costs
+    one command and loses nothing.
+    """
+    return ScopeError(
+        "nobody answered the scope prompt, so no section was chosen. Re-run "
+        f"with an explicit selection: `lab-validator scope --run {run.dir} "
+        "--sections all` (or '1,4,7', '4-6', a single number)."
+    )
 
 
 def prompt(
@@ -506,22 +524,31 @@ def prompt(
     reader = reader or input
     text = review(run, outline, vault)
     print(text, file=out)
+    #: A reader that answers nothing forever must not spin forever. `input()`
+    #: raises at a real EOF, but a piped or stubbed reader can return "" on
+    #: every call, and an unbounded re-ask would hang holding a live lab open.
+    blanks = 0
     while True:
         print(PROMPT_HELP, file=out)
         try:
             raw = reader(PROMPT)
         except EOFError:
-            # No input available after all. Walking everything is what this tool
-            # did before selection existed, so it is the safe fallback -- but it
-            # is recorded as 'default', never as a human's decision.
-            print("no input; walking ALL sections", file=out)
-            return everything(run, how="default")
+            raise _nobody_answered(run) from None
         raw = (raw or "").strip()
         if raw == "?":
             print(text, file=out)
             continue
         if not raw:
-            return everything(run, how="prompt", expression="all")
+            # A bare Enter is silence, and silence is not approval. Reading it
+            # as "all" turned the least deliberate keystroke available into the
+            # most expensive choice this tool can make -- hours of lab clock
+            # across every section -- and recorded it as a human's decision.
+            blanks += 1
+            if blanks >= BLANK_ANSWER_LIMIT:
+                raise _nobody_answered(run)
+            print("  nothing entered. Say 'all' if you mean all of them.", file=out)
+            continue
+        blanks = 0
         try:
             return parse(raw, run, how="prompt")
         except ScopeError as exc:
