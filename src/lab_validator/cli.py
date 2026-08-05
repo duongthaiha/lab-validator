@@ -359,8 +359,8 @@ async def _walk(args) -> int:
                 print(f"\nnext: {hint}   (scoped; the rest stay unknown)")
             else:
                 print(f"\nnext: {hint}")
-            print(f"  then: lab-validator text / step --run {run.dir}   "
-                  "(next says which, and why)")
+            print("  keep running `next` until it says stop; it names the one "
+                  "legal move and why")
             return 0
         finally:
             await browser.close()

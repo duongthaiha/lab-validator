@@ -13,21 +13,16 @@ pip install -e ".[dev]"
 python -m playwright install chromium
 ```
 
-Autonomous walking also needs the Copilot SDK extra and an authenticated
-GitHub Copilot CLI:
-
-```powershell
-pip install -e ".[agent]"
-copilot
-# use /login if the CLI is not already authenticated
-```
+Nothing else is required. The CLI has no model dependency: it sequences the walk
+and records evidence, and whoever answers the judgement moves — you, or an agent
+harness with this skill installed — talks to it through these commands.
 
 ## How the front door is assembled
 
 The package entry point is `lab_validator.cli:main`. It provides one command
 surface over two implementation styles:
 
-- `walk`, `auto`, `scope`, `next`, `debug`, `install-skill` and `package-skill`
+- `walk`, `scope`, `next`, `debug`, `install-skill` and `package-skill`
   are orchestration commands implemented in
   `src/lab_validator/cli.py`;
 - `run`, `step`, `text`, `corpus`, `discover`, `drive`, `session`, and `auth`
@@ -41,34 +36,34 @@ parser-backed options.
 
 The commands share a persisted run folder. `walk` captures and scopes a lab,
 `next` selects the next legal move, `step` records learner actions and verdicts,
-and `run --report` renders the trace. `auto` drives that same sequence; it does
-not maintain a separate agent-only run format.
+and `run --report` renders the trace. There is one run format, whether a human or
+an agent is answering.
 
 ## Typical workflows
 
-Choose the workflow by who will answer the judgement moves:
+The commands are the same either way; only who answers the judgement moves
+differs.
 
 | Need | Workflow |
 | --- | --- |
-| A human will perform and assess each task | `walk`, then repeat `next`, `text`, and `step` |
-| Copilot should perform and assess tasks | `auto --url ...` |
-| Capture now and decide later | `walk`, then `auto --run ...` or the manual loop |
-| Continue an interrupted run | `next --run ...` or `auto --run ...` |
-| Let Copilot recognize a natural-language validation request | `install-skill`, then invoke the installed skill |
+| Walk a lab, start to finish | `walk`, then repeat `next`, `text`, and `step` |
+| Capture now and decide later | `walk`, then the loop whenever you are ready |
+| Continue an interrupted run | `next --run ...` |
+| Let an agent recognize a natural-language validation request | `install-skill`, then invoke the installed skill |
+| Drive it from another harness | `package-skill`, unpack, `scripts/install_runtime.py` |
 
-Start the browser once, sign in manually, discover the live enrolment, and let
-the autonomous agent walk it:
+Start the browser once, sign in manually, discover the live enrolment, then
+capture the lab:
 
 ```powershell
 lab-validator session --launch --profile "<Edge profile>"
 lab-validator discover --list
-lab-validator auto --url "<URL printed by discover>" --name "<exact lab title>"
+lab-validator walk --url "<URL printed by discover>" --name "<exact lab title>"
 ```
 
-Capture first and walk manually:
+Then walk it:
 
 ```powershell
-lab-validator walk --url "<lab URL>" --name "<exact lab title>"
 lab-validator next --run runs\<timestamp>
 lab-validator text --run runs\<timestamp> --segment s01 --tasks
 lab-validator step --run runs\<timestamp> --segment s01 --ref <task-anchor> `
@@ -76,22 +71,20 @@ lab-validator step --run runs\<timestamp> --segment s01 --ref <task-anchor> `
 lab-validator run --run runs\<timestamp> --report
 ```
 
-Resume an interrupted autonomous run:
+Resume an interrupted run:
 
 ```powershell
-lab-validator auto --run runs\<timestamp>
+lab-validator next --run runs\<timestamp>
 ```
 
-Manual and autonomous walking use the same deterministic controller and
-artifacts. Switching from `next`/`step` to `auto --run` does not restart the lab
-or discard recorded evidence.
+Every decision is derived from the run folder, so resuming does not restart the
+lab or discard recorded evidence.
 
 ## Command summary
 
 | Command | Purpose |
 | --- | --- |
 | `walk` | Sign-in gate, resolve and launch a lab, capture instructions/credentials, run preflight, create and scope a run |
-| `auto` | Start or resume a run and answer judgement moves with the constrained agent |
 | `scope` | Review captured sections; optionally widen the selected scope |
 | `next` | Print the next deterministic move and its reason |
 | `debug` | Explain what recorded actions changed on screen |
@@ -121,28 +114,7 @@ enrolments. `--sections` accepts `all`, row numbers (`4`, `1,4,7`, `4-6`), IDs
 (`s04`), or an ID range (`s04..s06`). If omitted in a terminal, the command
 prints a review and prompts; non-interactive runs select all sections.
 
-The command creates a run but does not perform its tasks. Continue with `next`
-or `auto --run`.
-
-### `auto`
-
-```powershell
-lab-validator auto --url <url> [walk options] [agent options]
-lab-validator auto --run <folder> [--sections <selection>] [agent options]
-```
-
-Agent options:
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `--model` | `auto` | Copilot model; `auto` avoids pinning a retiring name |
-| `--max-turns` | `200` | Shared ceiling for model and mechanical moves |
-| `--turn-timeout` | `900` | Seconds allowed for one model turn |
-| `--runs` | `runs` | Root used when a new run is created |
-
-With `--run`, `auto` resumes the persisted state. Without it, `--url` is
-required and `auto` first performs the complete `walk` capture flow. The command
-exits before touching a lab if the optional SDK is unavailable.
+The command creates a run but does not perform its tasks. Continue with `next`.
 
 ### `scope`
 
@@ -188,9 +160,10 @@ Repeat `--do` to preserve action order. Common actions are:
 | `dialog` | Read/dismiss the Skillable client dialog |
 | `read`, `page:N` | Read/position the learner instruction pane |
 
-Use `--start-segment` and `--end-segment done|blocked|skipped` only in a manual
-walk; `auto` performs these transitions mechanically. A verdict must use the
-numbered task's anchor from `text --tasks`, not the containing section anchor.
+Use `--start-segment` and `--end-segment done|blocked|skipped` only when driving
+by hand; when following `next`, those transitions are issued as mechanical moves.
+A verdict must use the numbered task's anchor from `text --tasks`, not the
+containing section anchor.
 
 ### `run`
 
@@ -298,9 +271,9 @@ lab-validator install-skill [--into <skills-directory>] [--dry-run]
 
 Copies the skill — `SKILL.md`, `references/`, `assets/` and the CLI runtime that
 backs them — into the Copilot skills directory. The repository copy remains the
-source of truth. This installed copy is for direct Copilot skill
-invocation. `lab-validator auto` instead loads the repository skill directly
-through the Copilot SDK, so installing the skill is not an `auto` prerequisite.
+source of truth; this installed copy is what makes the skill discoverable from a
+natural-language request. Working in this repository, the skill files are already
+present and installing is unnecessary.
 
 The skill does not replace the executable: it teaches Copilot when and how to
 call the CLI and how to judge observations. Browser control, run transitions,
@@ -351,11 +324,10 @@ a ZIP file with a different extension. Then install its bundled runtime:
 python <skills-dir>\lab-validator\scripts\install_runtime.py
 ```
 
-The installer installs the local Python project with the agent extra and then
-installs Playwright Chromium. Pass `--without-agent` for a manual-only CLI or
-`--skip-browser` when the browser is already provisioned. Python 3.11+ is still
-required. The archive intentionally excludes browser profiles, credentials,
-run evidence, test fixtures, and development tooling.
+The installer installs the local Python project and then installs Playwright
+Chromium. Pass `--skip-browser` when the browser is already provisioned. Python
+3.11+ is still required. The archive intentionally excludes browser profiles,
+credentials, run evidence, test fixtures, and development tooling.
 
 ## Generated artifacts
 
@@ -379,7 +351,6 @@ guess.
 ## Exit and recovery behavior
 
 Argument and run-selection errors return a non-zero exit and name the ambiguity
-instead of guessing. Agent startup failures explain whether the SDK, model, or
-Copilot authentication is missing. Operational stops preserve the run folder;
-resume with `next --run` or `auto --run`. Read the coverage table before treating
-an absence of findings as success.
+instead of guessing. Operational stops preserve the run folder; resume with
+`next --run`. Read the coverage table before treating an absence of findings as
+success.

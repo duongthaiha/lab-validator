@@ -5,9 +5,9 @@ records what actually happens, and compares that evidence with the written
 instructions. Its output is an evidence-backed gap analysis, not just a test
 result.
 
-For operating the tool, see the [CLI reference](cli.md). For the autonomous
-walker's controls, stop conditions, and extension points, see
-[The agent that walks the lab](agent.md).
+For operating the tool, see the [CLI reference](cli.md). For what a harness
+driving this must guarantee, see
+[`references/harness-traps.md`](../references/harness-traps.md).
 
 ## End-to-end flow
 
@@ -49,7 +49,7 @@ walker's controls, stop conditions, and extension points, see
 | Evidence | Append-only trace, screenshots, redaction, resumable manifest | `runlog.py`, `imaging.py`, `console.py` |
 | Judgement | Finding taxonomy, ownership domain, learner-path checks | `taxonomy.py`, `learnerpath.py`, skill references |
 | Reporting | Per-section reports and the final gap-analysis roll-up | `report.py` |
-| Agent | Copilot SDK session constrained to learner-visible tools | `agent.py` |
+| Skill | Operating discipline and judgement, for whatever harness drives it | `SKILL.md`, `references/` |
 
 The control-surface preference is **oracle first, API second, DOM third, vision
 last**. Authoritative APIs are best for claims such as model availability;
@@ -65,12 +65,12 @@ The CLI and the skill are complementary, not alternative implementations.
 | --- | --- | --- |
 | CLI | Browser attachment, lab launch, persisted run state, deterministic sequencing, evidence validation, redaction, and reporting | Deciding what a learner-visible observation means |
 | Skill | Operating discipline, learner-path rules, evidence standards, finding taxonomy, and ownership judgement | Advancing run state, bypassing controls, or declaring coverage complete |
-| Model under `auto` | One scoped `perform` or `assess` decision at a time | Opening/closing sections, selecting the next move, or editing the report directly |
+| Harness | Sequencing the loop and answering one scoped `perform` or `assess` decision at a time | Deciding coverage, editing the report directly, or reaching the result off the learner's path |
 
 ### The CLI is the executable front door
 
 Installing the package registers `lab-validator = lab_validator.cli:main`.
-`cli.py` implements the orchestration commands (`walk`, `auto`, `scope`, `next`,
+`cli.py` implements the orchestration commands (`walk`, `scope`, `next`,
 `debug`, `install-skill`, and `package-skill`) and dispatches the lower-level
 commands (`run`, `step`, `text`, `corpus`, `discover`, `drive`, `session`, and
 `auth`) to their existing scripts. This keeps one discoverable command surface
@@ -95,34 +95,37 @@ or browser interruption.
    Copilot skills directory. A user can then ask
    Copilot to validate a lab; `SKILL.md` teaches it the CLI workflow and the
    judgement rules. The repository copy remains the versioned source of truth.
-2. **Repository-local autonomous skill.** `lab-validator auto` creates a Copilot
-   SDK session with the repository root in `skill_directories`. It does not
-   require the separately installed copy. The same skill guides judgement, but
-   Python drives the loop and exposes only the five allowed tools.
+2. **Portable archive.** `lab-validator package-skill` writes a deterministic
+   archive from the same curated file list `install-skill` uses — `SKILL.md`,
+   references, assets, the CLI source, delegated scripts, packaging metadata and
+   target descriptors — for any Agent Skills-compatible harness. Its bundled
+   `scripts/install_runtime.py` installs the CLI and browser dependencies after
+   extraction; secrets, browser profiles, tests, docs and run evidence are
+   excluded.
 
-For transfer to another Agent Skills-compatible harness,
-`lab-validator package-skill` writes a deterministic archive from the same
-curated file list `install-skill` uses — `SKILL.md`, references, assets, the CLI
-source, delegated scripts, packaging metadata and target descriptors. Its bundled
-`scripts/install_runtime.py` installs the CLI and browser dependencies after
-extraction; secrets, browser profiles, tests, docs and run evidence are excluded.
-
-Under `auto`, those tools shell out to the real CLI:
+Either way the harness drives the same commands a human would:
 
 ```text
 walkloop.next_move()
-  -> mechanical move: Python executes it directly
-  -> perform/assess: model receives section, tasks, screenshot, and skill
-       -> lab_instructions / lab_tasks
-       -> lab_act / lab_look
-       -> lab_record
-  -> controller fingerprints persisted state and asks next_move() again
+  -> mechanical move (open/read/report/advance): run the command it names
+  -> perform/assess: judgement, against the section text and the current screen
+       -> text --segment            read the instructions
+       -> text --segment --tasks    the anchors that need verdicts
+       -> step --do ...             act in the lab VM, and capture it
+       -> step --verdict --ref      one verdict against one task
+  -> ask next_move() again; the run folder, not the transcript, says what moved
 ```
 
-This indirection is intentional. The autonomous walker uses the same validation,
-run selection, trace writing, and report refresh paths as a human-operated walk.
-The model cannot claim progress in prose: only a changed run fingerprint and
-task-scoped evidence count.
+The indirection through the CLI is intentional. A harness gets the same
+validation, run selection, trace writing and report refresh paths as a
+human-operated walk, and cannot claim progress in prose: only task-scoped
+evidence in the trace counts.
+
+There used to be a third way — a bundled autonomous driver, `agent.py`, that
+sequenced the loop through a Copilot SDK session and exposed exactly five
+learner-visible tools. It was removed when the project became a portable skill:
+it pinned the solution to one harness, and the guarantees it enforced are stated
+for any harness in `references/harness-traps.md` under *The harness contract*.
 
 ### Trust boundaries
 
@@ -178,40 +181,30 @@ need judgement. Important refusals are enforced in code:
 - blocked work is still assessed so dependent tasks are explicitly deferred;
 - the final lab-clock reserve is protected for writing usable reports.
 
-## How the agent works
+## What a harness must guarantee
 
-`lab-validator auto` uses the same state machine as the manual
-`lab-validator next` workflow. Python owns sequencing; the model is invoked for
-one scoped `perform` or `assess` move at a time.
+An agent driving this uses the same state machine as the manual
+`lab-validator next` workflow. The CLI owns sequencing; the agent is there for
+one scoped `perform` or `assess` move at a time, working from the current
+section text, the exact outstanding task anchors, a current VM screenshot,
+credential labels (never values), and the judgement rules in `SKILL.md`.
 
-The model receives the current section text, the exact outstanding task anchors,
-a current VM screenshot, credential labels (never values), and the judgement
-skill. It can use only five tools:
+Four rules were previously enforced by the removed autonomous driver, and now
+have to be honoured by whatever is driving:
 
-| Tool | Capability |
+| Rule | Why |
 | --- | --- |
-| `lab_instructions` | Read the learner-facing section text |
-| `lab_tasks` | List the task anchors that require verdicts |
-| `lab_act` | Click, type, scroll, wait, and capture through the lab VM |
-| `lab_record` | Record one evidence-backed verdict against one task |
-| `lab_look` | Capture the current VM screen |
+| Act only through the learner's controls | shell, host filesystem or product API access lets an agent repair or bypass a defect a learner would still encounter |
+| Treat the run folder, not the transcript, as progress | trace length, outstanding anchors and section status are the only things that can distinguish doing the work from describing it |
+| Stop rather than grind | three unchanged turns, three repeated mechanical moves, two consecutive timeouts, a closed lab, a move ceiling, or the reporting-time reserve — each an explicit, resumable stop |
+| Keep raw output out of the prompt | the CLI redacts what it writes; it cannot redact a conversation |
 
-Opening/closing sections and refreshing reports are withheld from the model and
-executed by the controller. Shell, host filesystem, and product API access are
-denied because they would let the agent repair or bypass a defect a learner
-would still encounter.
-
-Before and after each model turn, the controller fingerprints the run folder:
-trace length, outstanding task anchors, and section status. No change means no
-progress regardless of the transcript. Three unchanged model turns, three
-repeated mechanical moves, two consecutive model timeouts, a closed lab, the
-move ceiling, or the reporting-time reserve all produce an explicit, resumable
-stop.
-
-Tool results pass through a redactor seeded from the run vault. Sign-ins use
-role-bound actions such as `signin:vm` and `signin:portal`; the model does not
-choose between raw passwords. This keeps secrets out of prompts, command lines,
-and reports while preserving the learner path.
+Section transitions and report refreshes are the controller's, driven by
+`next`'s mechanical moves rather than chosen. Sign-ins use role-bound actions
+(`signin:vm`, `signin:portal`) resolved against the vault in code, so no
+component upstream of the CLI chooses between raw passwords. The full version,
+with the incidents behind each rule, is in
+[`references/harness-traps.md`](../references/harness-traps.md).
 
 ## Evidence and verdicts
 
@@ -233,7 +226,6 @@ Use the existing run folder after interruption:
 
 ```powershell
 lab-validator next --run runs\<timestamp>
-lab-validator auto --run runs\<timestamp>
 ```
 
 Already recorded steps and section reports are retained. The controller derives

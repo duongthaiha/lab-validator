@@ -141,9 +141,11 @@ def test_the_package_ships_nothing_the_repository_only_needs(tmp_path):
         assert "__pycache__" not in name and not name.endswith((".pyc", ".egg-info")), (
             f"{name} is generated and must not be published"
         )
-    assert "scripts/agent_smoke.py" not in names, (
-        "the smoke harness needs the test corpus, so shipping it offers a command "
-        "that cannot work from an extracted archive"
+    shipped_scripts = {name for name in names if name.startswith("scripts/")}
+    assert shipped_scripts == {f"scripts/{s}" for s in cli.SKILL_SCRIPTS}, (
+        "scripts ship by enumeration, not by glob -- a development harness that "
+        "expects the test corpus would ship as a command that cannot work from "
+        "an extracted archive"
     )
 
 

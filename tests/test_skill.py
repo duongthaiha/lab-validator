@@ -39,16 +39,16 @@ INVOCATION = re.compile(r"^[ \t]*lab-validator[ \t]+(?P<rest>.+?)[ \t]*$", re.M)
 # not produce a helpful error; it produces a run that dies partway through a lab
 # with somebody waiting on it. So both documents get the same guard.
 README = ROOT / "README.md"
-# `docs/agent.md` is executed the same way: someone whose unattended walk has
-# just stopped, copying a resume command out of it at speed.
-AGENT_DOC = ROOT / "docs" / "agent.md"
-DOCS = {"SKILL.md": SKILL, "README.md": README, "docs/agent.md": AGENT_DOC}
+# `docs/cli.md` is executed the same way: someone whose walk has just stopped,
+# copying a resume command out of it at speed.
+CLI_DOC = ROOT / "docs" / "cli.md"
+DOCS = {"SKILL.md": SKILL, "README.md": README, "docs/cli.md": CLI_DOC}
 
 #: How many invocations each document must yield for the vacuity guard to mean
 #: anything. The regex is shared, so one command-dense document proves it still
 #: matches; a focused document only has to prove it was parsed at all. Set from
 #: what each file is *for*, not from what it happens to contain today.
-MINIMUM = {"SKILL.md": 8, "README.md": 8, "docs/agent.md": 2}
+MINIMUM = {"SKILL.md": 8, "README.md": 8, "docs/cli.md": 2}
 
 
 def invocations(path: Path = SKILL) -> list[str]:
@@ -313,9 +313,9 @@ def test_every_section_cross_reference_resolves():
 #
 # The README's Layout block is the only index of what this project contains.
 # Both tests below were written after it had silently fallen five modules
-# behind -- including `agent.py`, the entire autonomous walker. A stale listing
-# renders perfectly; a reader simply concludes the code is not there and either
-# writes it again or gives up. Neither failure leaves a trace.
+# behind. A stale listing renders perfectly; a reader simply concludes the code
+# is not there and either writes it again or gives up. Neither failure leaves a
+# trace.
 
 CODE = {
     "src/lab_validator": lambda p: p.name != "__init__.py",
@@ -355,7 +355,7 @@ def test_the_layout_lists_nothing_that_is_gone():
 def test_every_test_named_in_the_docs_exists():
     """Citing a test by name is a promise that it is still called that.
 
-    `agent.md` points at the guards that make its claims true -- "the
+    The docs point at the guards that make their claims true -- "the
     set-equality test will fail otherwise" is only reassuring if that test is
     still there under that name. A rename leaves the sentence reading perfectly
     while the guarantee behind it has quietly moved.
@@ -487,7 +487,7 @@ def test_the_readme_shows_the_prompt_the_code_actually_prints():
 # three copies still offered ids only, which is the one form nobody can type
 # before a lab has been captured.
 
-SECTIONS_COMMANDS = ["walk", "auto", "scope"]
+SECTIONS_COMMANDS = ["walk", "scope"]
 
 
 def _help_text(command: str, capsys) -> str:

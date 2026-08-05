@@ -23,7 +23,8 @@ engineering lessons are in [`docs/approach.md`](docs/approach.md) §2.8–§2.10
 
 ## Quick start
 
-Everything after step 2 is automated; step 2 is the only one that needs a human.
+Step 2 is the only step that needs a human. Steps 4 onward are the walk itself,
+driven by whatever agent harness you point at this skill — or by you.
 
 ```powershell
 # 1. a browser to attach to -- opens once, you keep it running
@@ -34,8 +35,11 @@ lab-validator session --launch --profile "<your Edge profile>"
 # 3. ask which labs you can actually launch. Do not guess a URL.
 lab-validator discover --list
 
-# 4. walk it, with an agent
-lab-validator auto --url "<the URL step 3 printed>" --name "<the title step 3 printed>" --max-turns 40 --turn-timeout 900
+# 4. launch the lab and capture it: instructions, credentials, scope
+lab-validator walk --url "<the URL step 3 printed>" --name "<the title step 3 printed>"
+
+# 5. then loop: ask what is due, do it, ask again
+lab-validator next --run runs/<timestamp>
 ```
 
 Step 3 prints something like:
@@ -50,7 +54,7 @@ Step 3 prints something like:
 so step 4 becomes:
 
 ```powershell
-lab-validator auto --url "https://mslearningcampus.com/User/CurrentTraining/3399370" --name "WorkshopPLUS - Azure AI Platform and Services" --max-turns 40 --turn-timeout 900
+lab-validator walk --url "https://mslearningcampus.com/User/CurrentTraining/3399370" --name "WorkshopPLUS - Azure AI Platform and Services"
 ```
 
 **Why step 3 exists, and why it is not optional.** Learning Campus URLs are not
@@ -62,7 +66,7 @@ day this section was written — resolves to nothing either. `discover --list`
 reads the page with your signed-in session and prints what is launchable
 **now**, which is the only answer that cannot go stale.
 
-Then `auto` launches the lab, waits for the client, extracts the instructions,
+`walk` launches the lab, waits for the client, extracts the instructions,
 captures the lab's own credentials — and **stops to ask which sections to
 walk**, because validating 23 sections takes hours:
 
@@ -74,10 +78,15 @@ Pass `--sections 4-6` to skip the prompt entirely.
 The report lands at `runs/<timestamp>/gap-analysis.md`, and is rewritten after
 every step — a run you interrupt is still a run you can read.
 
+**Step 5 is the whole walk.** `next` reads the run folder and names one move —
+open a section, read it, perform its tasks, report, advance — and says why. You
+run what it names (`text`, `step`, `run --report`) and ask again. Nothing lives
+in process memory, so an interrupted walk resumes with the same command.
+
 **If it says the lab has closed**, that is the tool refusing to invent: a
 Skillable lab that has ended keeps its tab, title and URL, so nothing else would
 have noticed. Relaunch the lab and resume the same run with
-`lab-validator auto --run runs/<timestamp>`.
+`lab-validator next --run runs/<timestamp>`.
 
 **If nothing seems to be happening**, ask:
 
@@ -91,11 +100,10 @@ impression. It works on runs recorded before this feature existed, because it
 measures the screenshots already on disk. See
 [Reading a run back](#reading-a-run-back--why-nothing-is-happening).
 
-**What of this is proven.** Steps 1–3 and the resolution of that URL were run
-against the live tenant on 2026-07-31. `auto` walking a section to completion
-has not yet been observed end to end — the one run that got that far ended when
-the lab itself closed. Treat step 4 as the documented path, not a demonstrated
-one, and see [`docs/agent.md`](docs/agent.md) for what each stop message means.
+**What of this is proven.** Steps 1–4 and the resolution of that URL were run
+against the live tenant on 2026-07-31. A single section walked to completion has
+not yet been observed end to end — the one run that got that far ended when the
+lab itself closed. Treat step 5 as the documented path, not a demonstrated one.
 
 ## Guidance — choose the document for the question
 
@@ -113,14 +121,14 @@ question, not by reading all five:
 | What do I do *next*, mid-walk? | don't read — ask: `lab-validator next` |
 | Is this observation a defect? Whose? What evidence do I need? | [`references/judgement.md`](references/judgement.md) |
 | What are the steps of a walk, in order? | [`SKILL.md`](SKILL.md) |
-| The agent stopped — why? What was it allowed to do? How do I change it? | [`docs/agent.md`](docs/agent.md) |
+| What must my harness guarantee, and why? | [`references/harness-traps.md`](references/harness-traps.md) |
 | Why is the engine built this way, and what went wrong before? | [`docs/approach.md`](docs/approach.md) |
 
 The boundaries between them are deliberate. `docs/solution.md` explains how the
-parts cooperate, `docs/cli.md` describes the executable surface, `docs/agent.md`
-describes the autonomous controller, and `SKILL.md` tells a Copilot agent how to
-operate and judge a walk. If two documents appear to disagree about a command,
-the real parser and its CLI drift tests are authoritative.
+parts cooperate, `docs/cli.md` describes the executable surface, and `SKILL.md`
+tells an agent how to operate and judge a walk. If two documents appear to
+disagree about a command, the real parser and its CLI drift tests are
+authoritative.
 
 `judgement.md` is the one worth reading even if you never run this tool. Each of
 its principles was paid for by a wrong finding — a defect claimed on one
@@ -344,52 +352,44 @@ Two refusals you will meet, both intentional:
 | still asking for a task you believe you did | your `--ref` named a *section*; `lab-validator text --segment s08 --tasks` prints the real anchors |
 | asking you to REPORT a section you already reported | a finding was recorded *after* that report was written, so the report on disk no longer says what the run knows |
 
-### Or let an agent walk it: `auto`
+### Or hand the loop to an agent
 
-```powershell
-lab-validator auto --url "<lab url>" --name "<lab title>"   # sign in, then leave it
-```
+The loop above is the same loop an agent harness drives. Nothing about it is
+manual: `next` names one move, a command carries it out, the folder records what
+happened. Install the skill (`lab-validator install-skill`) or unpack a
+`package-skill` archive into whatever harness you use, and it answers the
+PERFORM and ASSESS moves — the judgement — while the CLI keeps the sequencing.
 
-Same loop, same refusals — the only difference is who answers the PERFORM moves.
-`auto` needs the optional extra (`pip install -e .[agent]`) and an authenticated
-`copilot`; without either it fails saying so and points you back at
-`lab-validator next`, which needs no model at all.
-
-**Python keeps the sequencing; the model only supplies judgement.** That split is
-the whole design:
+**The CLI keeps the sequencing on purpose.** The loop's refusals were each paid
+for by a wrong report, and an agent that owned sequencing would turn every one of
+them into a suggestion it could quietly ignore:
 
 ```
-open / read / report / advance   →  executed directly, no model consulted
-perform / assess                 →  one scoped model turn, then ask the loop again
+open / read / report / advance   →  mechanical: run the command the loop names
+perform / assess                 →  judgement: this is what the agent is for
 ```
 
-The loop's refusals were each paid for by a wrong report, and a model that owned
-sequencing would turn every one of them into a suggestion it could quietly
-ignore. So it is never asked. Three consequences worth knowing:
+This project used to ship its own autonomous driver, which enforced four things
+in code. It was deleted when the project became a portable skill, so a harness
+now has to honour them itself — they are stated in
+[`references/harness-traps.md`](references/harness-traps.md) under *The harness
+contract*, and summarised in `SKILL.md`:
 
-- **A model's claim of progress is never believed.** Before and after every turn
-  the run folder is fingerprinted — steps recorded, tasks still unjudged, section
-  status. Identical fingerprint means nothing happened, whatever the transcript
-  says. Three of those in a row stops the walk and says which task was
-  outstanding.
-- **The loop applies that scepticism to itself too.** A mechanical move that comes
+- **A claim of progress is never evidence.** Only a trace record scoped to a task
+  anchor counts. Ask `next` again: unchanged outstanding tasks mean nothing
+  happened, whatever was just said.
+- **Apply that scepticism to the commands too.** A mechanical move that comes
   back unchanged three times is a command failing silently, not a move worth
-  repeating; it stops and tells you what to run by hand.
-- **Tools outside the learner's path are denied, not discouraged.** A shell would
-  let the agent repair a broken deployment and then report the lab as working
-  while the learner still cannot finish it — a confidently wrong answer, which is
-  worse than no answer. Tool output is scrubbed through the run's redactor on the
-  way back, so lab-issued credentials never enter the transcript.
+  repeating.
+- **Stay on the learner's path.** A shell lets an agent repair a broken
+  deployment and then report the lab as working while the learner still cannot
+  finish it — a confidently wrong answer, which is worse than no answer.
+- **Keep credentials out of the conversation.** The CLI redacts what it writes;
+  it cannot redact your transcript. Ask by label and by role.
 
-Budgets are explicit, because an unattended walk that cannot finish should stop
-rather than spend: `--max-turns` (default 200) and `--turn-timeout` (default 900s,
-since a lab step is not a chat reply). `--run <folder>` drives a run that already
-exists, so an interrupted walk resumes instead of restarting.
+An interrupted walk resumes with `lab-validator next --run <folder>`, because
+the position was never in memory to begin with.
 
-**[`docs/agent.md`](docs/agent.md) is the rest of it** — what each stop message
-means and what to do about it, the five controls the model gets and the three
-withheld from it, how to change the agent without making its report unbelievable,
-and how to verify a change with no lab at all.
 
 ### Act through the learner's controls
 
@@ -432,7 +432,7 @@ Ids work too, once you know them — from the review, or from a previous run:
 
 ```powershell
 lab-validator walk --url "<lab url>" --name "<lab title>" --sections 4-6
-lab-validator auto --url "<lab url>" --name "<lab title>" --sections all
+lab-validator walk --url "<lab url>" --name "<lab title>" --sections all
 lab-validator walk --url "<lab url>" --name "<lab title>" --sections s04..s06
 ```
 
@@ -466,8 +466,8 @@ different fact from a full one, and it says so:
   Never reached is a walk that ran out of road; not selected is a decision
   somebody made. Same ignorance, different cause, different thing to do.
 
-No prompt appears when stdin is not a terminal — CI and unattended `auto` runs
-walk everything, as they always did, and the manifest records that nobody was
+No prompt appears when stdin is not a terminal — CI and unattended runs walk
+everything, as they always did, and the manifest records that nobody was
 asked rather than implying somebody approved.
 
 ### The rest of the commands
@@ -679,18 +679,16 @@ skills directory. Then install the bundled runtime:
 python <skills-dir>\lab-validator\scripts\install_runtime.py
 ```
 
-That installs the CLI, agent extra, and Playwright Chromium. Use
-`--without-agent` or `--skip-browser` for a smaller manual-only setup. Browser
-profiles, credentials, and run evidence are never bundled. A SHA-256 digest is
-printed when the package is built so the file can be verified after transfer.
+That installs the CLI and Playwright Chromium. Use `--skip-browser` for a
+smaller setup. Browser profiles, credentials, and run evidence are never
+bundled. A SHA-256 digest is printed when the package is built so the file can
+be verified after transfer.
 
-`lab-validator auto` does not depend on that installed copy. It starts a Copilot
-SDK session and loads the repository skill directly, then exposes only five
-learner-visible CLI-backed tools. Python still owns sequencing, section state,
-coverage checks, and report generation; the model supplies the `PERFORM` and
-`ASSESS` judgement. See [How Lab Validator works](docs/solution.md) for the full
-interaction and [The agent that walks the lab](docs/agent.md) for controls and
-stop behavior.
+The archive carries no harness of its own: it is `SKILL.md`, the references, the
+CLI source and the delegated scripts. Whatever agent runtime you unpack it into
+supplies the loop, and the CLI supplies the sequencing, section state, coverage
+checks and report generation. See [How Lab Validator works](docs/solution.md)
+for the full interaction.
 
 The repo copy is the source of truth; the installed copy is a deployment of it.
 A test asserts the two have not drifted, and another parses every command out of
@@ -728,7 +726,6 @@ ruff check src scripts tests
 docs/approach.md                    architecture, findings and reuse guide
 docs/solution.md                    concise end-to-end solution architecture
 docs/cli.md                         CLI workflows, commands, options and recovery
-docs/agent.md                       the autonomous walker: stops, limits, changing it
 docs/gapanalysis.md                 learner-facing gaps found in the target lab
 SKILL.md                            the agent skill — the walk, step by step
 references/*.md                     judgement, taxonomy, traps, Skillable mechanics
@@ -744,13 +741,11 @@ scripts/lab_discover.py             list enrolments; scaffold a target descripto
 scripts/browser_session.py          attach to a signed-in browser; recon commands
 scripts/lab_drive.py                drive a running lab: instructions, creds, VM
 scripts/bootstrap_auth.py           fallback: sign-in → encrypted session
-scripts/agent_smoke.py              exercise the agent's SDK wiring with no lab
 scripts/install_runtime.py          install the CLI from an extracted skill archive
 
 src/lab_validator/cli.py            `lab-validator` front door; the walk command
 src/lab_validator/walkloop.py       what to do next, and the refusals that matter
 src/lab_validator/scope.py          review, then choose which sections to walk
-src/lab_validator/agent.py          `auto`: the loop driven by a model, on a leash
 src/lab_validator/runlog.py         run folder, append-only trace, resume, redaction
 src/lab_validator/taxonomy.py       verdict codes and the instruction/setup domain axis
 src/lab_validator/corpus.py         instruction segmenter and structural checks

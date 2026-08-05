@@ -26,7 +26,7 @@ with the observations already made. Same input every time, for every version of
 the skill, forever.
 
 That is affordable because of what the skill actually contributes. It does not
-implement browser control; the CLI does, and that has 817 offline unit tests.
+implement browser control; the CLI does, and that has 907 offline unit tests.
 What the skill contributes is two things:
 
 - **Operating** — drive the CLI, stay in the learner's path, capture evidence

@@ -35,7 +35,7 @@ python -m lab_validator.cli <command>
 The two commands that must pass before you call anything done:
 
 ```powershell
-python -m pytest -q          # 817 tests, ~13s, no network
+python -m pytest -q          # 907 tests, ~13s, no network
 python -m ruff check .
 ```
 
@@ -53,7 +53,7 @@ assets/                the gap-analysis output template
 evals/                 skill-quality evals; results go in ../lab-validator-workspace/
 tests/                 pytest; one file per module, all offline
 targets/*.toml         lab descriptors
-docs/                  approach.md (the reasoning), solution.md, cli.md, agent.md
+docs/                  approach.md (the reasoning), solution.md, cli.md
 runs/, artifacts/      generated, gitignored, may contain lab credentials
 ```
 
@@ -92,7 +92,7 @@ It currently sits around 495. Adding a section means moving one out to
 `references/`.
 
 **Docs are tested against the code.** `tests/test_skill.py` scrapes every
-`lab-validator <cmd> --flag` out of `SKILL.md`, `README.md` and `docs/agent.md`
+`lab-validator <cmd> --flag` out of `SKILL.md`, `README.md` and `docs/cli.md`
 and checks it against the real argparse surface. It also checks:
 
 - every verdict code and domain named in the docs exists in `taxonomy.py`
@@ -189,7 +189,7 @@ files, Playwright traces and storage-state JSON, and runs gitleaks. Install it:
 | Why is it built this way? | `docs/approach.md` (long; the reasoning of record) |
 | How do the pieces fit? | `docs/solution.md` |
 | What can the CLI do? | `docs/cli.md` |
-| How does the autonomous walk work? | `docs/agent.md` |
+| What must a harness driving this guarantee? | `references/harness-traps.md` |
 | What does the output look like? | `docs/gapanalysis.md` (real example) |
 | How should a model judge a lab? | `skills/lab-validator/SKILL.md` + `references/` |
 

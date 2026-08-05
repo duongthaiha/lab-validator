@@ -7,6 +7,59 @@ a walk rather than during one.
 
 ---
 
+## The harness contract
+
+This project used to ship its own autonomous driver, which enforced the four
+rules below in code. It was deleted when the project became a portable skill, so
+whatever harness you are running in has to honour them itself. They are not
+style; each was written after a run reported the wrong thing.
+
+**1. Stay on the learner's path.** The driver exposed exactly five controls —
+read the section text, list its task anchors, act in the lab VM, capture the
+screen, record one verdict — and denied everything else, including the shell.
+Not for safety: an agent that repairs a broken deployment from a terminal
+reports the lab as working, and the learner following the written instructions
+still cannot complete it. That is a *confidently wrong* report, which is worse
+than no report. Faster channels may be used as read-only oracles — a model
+lifecycle API settles "is this retired?" in seconds — but anything that
+**changes** the lab must be a control the learner has.
+
+**2. Evidence is progress; the transcript is not.** Before and after each turn
+the driver fingerprinted the run folder — trace length, outstanding task
+anchors, section status — and compared them. A model that says "I completed the
+section" produces a transcript identical to one that did. Only the folder can
+tell them apart. Ask `lab-validator next` after acting: unchanged outstanding
+tasks mean nothing happened, whatever was just claimed.
+
+**3. Stop rather than grind.** The driver's stop conditions, all of which are
+still the right ones:
+
+| Condition | Why |
+| --- | --- |
+| 3 turns changing nothing in the run folder | one is a turn spent reading; three is a loop |
+| the same mechanical move returning 3 times | the command is not taking — repeating will not help |
+| 2 consecutive turns over the time budget | one long portal sign-in is slowness, not failure; two is wedged |
+| the client says *Lab Closed* | nothing observed after this is evidence about the lab |
+| a move ceiling | an unattended walk must have an end |
+| under 20 minutes of lab clock | reserved for writing the reports up |
+
+Every one of these produces a *resumable* stop. Sections already walked keep
+their reports; the rest are unknown, not correct.
+
+**4. Never echo raw output into a prompt.** The CLI redacts what it writes to
+`trace.jsonl` and `run.log`, seeded from the run vault — but it cannot redact
+your conversation. Ask for credentials by label (`cred:SCOPE/LABEL`) and
+sign-ins by role (`signin:vm`, `signin:portal`). The role form is not
+convenience: it is the only form with **no parameter through which the wrong
+credential can be requested**. A lab issues several rows called `Username` in
+different scopes, and given a free choice a model picks the one its *task*
+mentions rather than the one its *screen* wants — thirteen times in a row, on
+one recorded run. `signin:portal` is refused until `signin:vm` has run, because
+everything reachable is inside the VM. Both guards live in the CLI and read the
+run's trace, so they survive a resume.
+
+---
+
 ## Reading results
 
 **"No error output" is not success.** Cells wrapped in `try/except` report clean

@@ -19,11 +19,6 @@ def main() -> int:
         description="Install the lab-validator CLI bundled with this skill."
     )
     parser.add_argument(
-        "--without-agent",
-        action="store_true",
-        help="install the manual CLI without the GitHub Copilot SDK extra",
-    )
-    parser.add_argument(
         "--skip-browser",
         action="store_true",
         help="do not install the Playwright Chromium browser",
@@ -34,9 +29,8 @@ def main() -> int:
     if not (skill_root / "pyproject.toml").is_file():
         parser.error(f"{skill_root} does not look like a lab-validator skill: no pyproject.toml")
 
-    target = str(skill_root) + ("" if args.without_agent else "[agent]")
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", target],
+        [sys.executable, "-m", "pip", "install", "-e", str(skill_root)],
         check=True,
     )
     if not args.skip_browser:

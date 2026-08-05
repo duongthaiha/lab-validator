@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import builtins
+import re
 import sys
 from pathlib import Path
 
@@ -277,14 +278,17 @@ async def test_ensure_open_says_nothing_when_the_lab_is_live():
     await LabClient(FakeClientPage(LIVE_PAGE)).ensure_open()
 
 
-def test_the_agents_closed_lab_marker_is_a_substring_of_the_real_refusal():
-    """The loop matches on the refusal's own words, so the two must not drift.
+def test_the_documented_closed_lab_refusal_is_what_a_step_actually_prints():
+    """A harness stops on this refusal's own words, so the two must not drift.
 
-    A marker that no longer appears in the message does not fail: it silently
-    stops matching, and the agent goes back to grinding out its stall ceiling
-    against a lab that is not there.
+    `SKILL.md` quotes the refusal and tells the reader to stop on it. Wording
+    that has moved on does not fail: the harness silently stops matching, and
+    goes back to grinding out its stall ceiling against a lab that is not there.
     """
-    from lab_validator.agent import LAB_CLOSED_MARK
+    skill = (Path(__file__).resolve().parents[1] / "SKILL.md").read_text(encoding="utf-8")
+    quoted = re.search(r"^!! (The lab client says:[^.]*)\.", skill, re.M)
+    assert quoted, "SKILL.md no longer quotes the closed-lab refusal at all"
+    marker = quoted.group(1).split(":")[0]
 
     lab = LabClient(FakeClientPage(CLOSED_PAGE))
     try:
@@ -293,9 +297,9 @@ def test_the_agents_closed_lab_marker_is_a_substring_of_the_real_refusal():
         message = str(exc)
     else:  # pragma: no cover - the refusal is asserted above
         raise AssertionError("ensure_open did not refuse a closed lab")
-    assert LAB_CLOSED_MARK in message, (
-        f"agent.LAB_CLOSED_MARK is not in the refusal it is meant to spot:\n"
-        f"  marker:  {LAB_CLOSED_MARK!r}\n  message: {message!r}"
+    assert marker in message and "Lab Closed" in message, (
+        f"SKILL.md quotes a refusal the CLI no longer prints:\n"
+        f"  documented: {quoted.group(1)!r}\n  actual:     {message!r}"
     )
 
 
