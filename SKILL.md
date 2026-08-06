@@ -333,6 +333,11 @@ Record `PASS` for things you verified correct, with the same rigour. **A report
 with no positive evidence cannot distinguish "verified correct" from "never
 reached"**, and a reader will assume the flattering one.
 
+Then ask whether the path that just worked is still the *current* one. A
+*classic* console, a superseded API version, a published retirement date — that
+is `LAB010`, recorded **as well as** the `PASS`: the only code a working step can
+carry, and so the only one you must look for rather than trip over.
+
 ## Step 8 — Finish the section and move on
 
 ```powershell
@@ -481,11 +486,6 @@ are in `references/judgement.md`.
 | Would editing the lab text alone fix this? | the text names a dead model, a renamed blade, a moved menu, a dead link | `instruction` |
 | Would the text be correct if the environment were built properly? | a resource was never provisioned, shipped config is wrong, credentials fail, the image serves something other than it claims | `setup` |
 | Could either be true and you have not distinguished them? | — | `undetermined`, **and name the experiment that would decide** |
-
-The two most damaging findings in the reference walk were **setup** defects, and
-neither announced itself: an image shipping deployments *named* `gpt-4o` that
-actually served a different model, and a `.env` wrong in two independent ways.
-Both read, at first, as five unrelated bugs in five unrelated labs.
 
 ---
 

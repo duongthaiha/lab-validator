@@ -28,6 +28,7 @@ python -c "import sys; sys.path.insert(0,'src'); from lab_validator import taxon
 | `LAB007` | Timing or quota | setup | major | The step cannot complete in the time or capacity available — including 'this never finishes'. Usually the environment, not the text, unless the text promises a duration it cannot honour. |
 | `LAB008` | Undocumented mandatory step | instruction | major | Something the learner must do to proceed that the instructions never mention. Found by doing the lab, never by reading it. |
 | `LAB009` | Defective sample code | either | major | Code or configuration shipped with the lab is wrong — it swallows failure, produces no output, or reports success having done nothing. The most dangerous class, because it hides every other defect from the learner. |
+| `LAB010` | Superseded or retiring feature | instruction | info | The instructions teach a path the product has moved on from — a 'classic' experience, a superseded API version, a feature with an announced retirement. Unique among the codes in that the step *succeeds*: it is a defect with a deadline rather than a defect today, and the only one that has to be looked for rather than tripped over. An instruction defect, because the newer path working here is what makes the older one superseded; if the environment cannot offer the newer path, that is LAB002 or LAB007 instead. |
 | `BLOCKED` | Could not be attempted | undetermined | — | A dependency failed, so this was never reached. A status, not a finding: the blocker itself is the finding, and the walk should carry on reading rather than stop here. |
 | `DEFERRED` | Deliberately not attempted | undetermined | — | Skipped on purpose, and requires a justification that survives review. Distinct from BLOCKED: nothing prevented it. |
 
@@ -49,6 +50,9 @@ These are the pairs that get confused, and the question that separates them.
 | `LAB001` vs `LAB007` | Is the model gone, or is it present-but-refused? Gone → 001. Refused for capacity/quota → 007. |
 | `LAB008` vs `LAB003` | Did the text describe the step *badly*, or *not at all*? Badly → 003. Not at all → 008. |
 | `LAB009` vs `LAB000` | Does it reproduce? Reproducible defect in shipped code → 009. Did not reproduce → 000. |
+| `LAB010` vs `LAB005` | Does the old path still work? Yes → 010 (superseded). No → 005 (removed). 010 is what 005 was a year ago. |
+| `LAB010` vs `LAB003` | Is the *name* stale, or the *approach*? A renamed button on the current path → 003. The current path is elsewhere entirely → 010. |
+| `LAB010` vs `PASS` | Both apply — the step worked. Record the `PASS` for what you verified, and `LAB010` separately for the ageing. One does not displace the other. |
 | `BLOCKED` vs `DEFERRED` | Were you *prevented*, or did you *choose*? Prevented → BLOCKED. Chose → DEFERRED, and justify it. |
 
 ## Severity
@@ -66,6 +70,14 @@ defect is to fix.
 Note that **"the learner completes it believing something false" is major, not
 minor.** A step that silently does nothing and prints a success message is more
 damaging than one that fails loudly, because it propagates.
+
+`LAB010` defaults to `info` because the severity scale measures *this* learner's
+experience, and a superseded path costs them nothing — it works. Raise it when
+the cost has a date attached: `minor` when the product labels the path legacy or
+classic, `major` when a retirement date is published and the lab will stop
+working on it. Severity is the only place that distinction can be recorded, so
+leaving everything at `info` makes an ageing lab indistinguishable from a
+pristine one.
 
 ## Completability
 

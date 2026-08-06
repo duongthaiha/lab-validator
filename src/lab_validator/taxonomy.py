@@ -177,6 +177,21 @@ _VERDICTS: tuple[Verdict, ...] = (
         True,
     ),
     Verdict(
+        "LAB010",
+        "Superseded or retiring feature",
+        "The instructions teach a path the product has moved on from -- a "
+        "'classic' experience, a superseded API version, a feature with an "
+        "announced retirement. Unique among the codes in that the step "
+        "*succeeds*: it is a defect with a deadline rather than a defect today, "
+        "and the only one that has to be looked for rather than tripped over. "
+        "An instruction defect, because the newer path working here is what "
+        "makes the older one superseded; if the environment cannot offer the "
+        "newer path, that is LAB002 or LAB007 instead.",
+        "instruction",
+        "info",
+        True,
+    ),
+    Verdict(
         "BLOCKED",
         "Could not be attempted",
         "A dependency failed, so this was never reached. A status, not a "

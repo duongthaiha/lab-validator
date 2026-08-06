@@ -113,9 +113,36 @@ def test_the_fixture_still_plants_every_trap_it_claims_to():
         "gpt-35-turbo" in entry.get("note", "") for entry in entries
     ), "no name/identity mismatch to test ownership against"
 
+    ageing = [
+        entry
+        for entry in entries
+        if entry["verdict"] == "PASS" and "classic" in entry.get("note", "")
+    ]
+    assert ageing, "no superseded-but-working path, so nothing probes LAB010"
+    assert "LAB010" not in verdicts, (
+        "the fixture must record the observation, not the verdict -- a planted "
+        "LAB010 hands over the answer and the eval stops measuring whether the "
+        "skill recognises an ageing path at a step that passed"
+    )
+
     run = json.loads((FIXTURE / "run.json").read_text(encoding="utf-8"))
     unreached = [s for s in run["segments"] if s["status"] == "not_selected"]
     assert unreached, "nothing unwalked, so coverage cannot be got wrong"
+
+
+def test_the_fixture_never_runs_time_backwards():
+    """Sequence order and clock order have to agree, and nothing made them.
+
+    Inserting a step into a recorded walk renumbers `seq` -- which the
+    contiguity check above notices -- while leaving `ts` alone, which nothing
+    noticed. A trace where a later step is timestamped earlier is not a walk
+    anybody could have done, and it is read by a model that will happily reason
+    about the order it finds.
+    """
+    lines = (FIXTURE / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    entries = [json.loads(line) for line in lines if line.strip()]
+    stamps = [entry["ts"] for entry in entries]
+    assert stamps == sorted(stamps), "a step is timestamped before the one it follows"
 
 
 def test_the_fixture_carries_nothing_that_looks_like_a_real_lab():

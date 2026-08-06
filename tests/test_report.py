@@ -314,6 +314,79 @@ def test_numbering_is_stable_across_domains(tmp_path):
     assert "**#1**" in text.split("### Who fixes what")[1]
 
 
+# --- ageing guidance -------------------------------------------------------
+
+
+def test_a_lab_can_be_entirely_green_and_still_be_ageing(tmp_path):
+    """The one finding class that survives a completely clean run.
+
+    Every other code is reached by something going wrong, so a report with no
+    failures is a report with nothing to say. `LAB010` is recorded at a step
+    that *worked*, which means a lab built on an experience the product is
+    retiring passes every check and reads as pristine. The section has to
+    appear even when the verdict is a flat yes, or the only signal a lab is
+    dating is one `info` line buried under the passes.
+    """
+    run = make_run(tmp_path)
+    for seg in ("s00", "s01"):
+        run.start_segment(seg)
+        run.step(seg, verdict="PASS", surface="analysis", note="the Deploy button works")
+        run.end_segment(seg, "done")
+    run.step("s00", verdict="LAB010", severity="info", domain="instruction",
+             observed="the portal offers this only under 'classic'",
+             note="Task 1 routes through the classic experience")
+    text = render(run)
+
+    assert "**YES**" in text, "a superseded path still completes; it must not read as broken"
+    assert "## Ageing guidance (works today)" in text
+    assert "classic" in text.split("## Ageing guidance (works today)")[1]
+
+
+def test_ageing_is_reported_before_the_passes_it_qualifies(tmp_path):
+    """Placement is the argument. After "Verified correct" it is a footnote to
+    a clean bill of health; before it, it qualifies one."""
+    run = make_run(tmp_path)
+    run.step("s00", verdict="LAB010", severity="info", observed="superseded API version")
+    text = render(run)
+
+    assert text.index("## Ageing guidance") < text.index("## Verified correct")
+    assert text.index("## Findings") < text.index("## Ageing guidance")
+
+
+def test_an_ageing_entry_keeps_its_global_finding_number(tmp_path):
+    """Lifting it out must not renumber it, or the same defect is #1 in one
+    section of the report and #2 in another."""
+    run = make_run(tmp_path)
+    run.step("s00", verdict="LAB001", severity="critical", note="model retired")
+    run.step("s00", verdict="LAB010", severity="info", observed="classic console")
+    text = render(run)
+
+    assert "**#2**" in text.split("## Ageing guidance")[1].split("## Verified correct")[0]
+
+
+def test_no_ageing_section_when_nothing_is_dated(tmp_path):
+    run = make_run(tmp_path)
+    run.step("s00", verdict="LAB003", severity="minor", note="the blade was renamed")
+    assert "## Ageing guidance" not in render(run)
+    assert "## Ageing guidance" not in render_segment(run, section(run, "s00"))
+
+
+def test_ageing_does_not_displace_the_confirmation_of_the_same_step(tmp_path):
+    """`LAB010` is recorded *as well as* the `PASS`, never instead of it.
+
+    The step genuinely worked, and a walk that swapped the confirmation for the
+    finding would lose the evidence that it did -- leaving a report that cannot
+    tell a superseded-but-working path from one nobody tried.
+    """
+    run = make_run(tmp_path)
+    run.step("s00", verdict="PASS", surface="analysis", note="deployment succeeded as written")
+    run.step("s00", verdict="LAB010", severity="info", observed="v1 API, superseded by v2")
+    text = render(run)
+
+    assert "deployment succeeded as written" in text.split("## Verified correct")[1]
+    assert "v1 API" in text.split("## Ageing guidance")[1]
+
+
 
 # ---- coverage the section table cannot express ---------------------------
 #

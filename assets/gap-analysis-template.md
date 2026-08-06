@@ -100,6 +100,16 @@ that would settle an undetermined owner.}}
 
 - {{severity_icon}} **`{{anomaly_code}}`** {{anomaly_message}}
 
+## Ageing guidance (works today)
+
+{{Omit when no superseded or retiring path was observed. Placed immediately
+before the passes it qualifies: every entry here is a step that succeeded, so a
+report can be entirely green and still describe a lab the product has moved on
+from. Numbers are the same global finding numbers used above.}}
+
+- **#{{finding_number}}** {{finding_name}} *({{section}})* — {{observed}}
+  <br>instruction: `{{task_anchor}}`
+
 ## Verified correct
 
 {{confirmation_count}} instruction(s) were checked and matched reality:

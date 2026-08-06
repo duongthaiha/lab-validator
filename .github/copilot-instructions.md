@@ -35,7 +35,7 @@ python -m lab_validator.cli <command>
 The two commands that must pass before you call anything done:
 
 ```powershell
-python -m pytest -q          # 907 tests, ~13s, no network
+python -m pytest -q          # 963 tests, ~13s, no network
 python -m ruff check .
 ```
 

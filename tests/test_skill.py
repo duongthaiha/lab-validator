@@ -157,6 +157,67 @@ def test_documented_domains_are_real():
         assert used in DOMAINS, f"--domain {used} is not one of {DOMAINS}"
 
 
+#: `references/taxonomy.md` calls itself generated from `taxonomy.py` and says
+#: the module wins in a disagreement -- but nothing made that true, so the file
+#: was a hand-maintained copy wearing a generated file's disclaimer. The table
+#: renders `--` as an em dash and `None` as one too, so both are normalised
+#: before comparing rather than being written back into the Python.
+TAXONOMY_DOC = ROOT / "references" / "taxonomy.md"
+DOC_ROW = re.compile(r"^\| `([A-Z0-9]+)` \| (.+?) \| (.+?) \| (.+?) \| (.+?) \|$", re.M)
+
+
+def _documented_codes() -> dict[str, tuple[str, str, str, str]]:
+    rows = DOC_ROW.findall(TAXONOMY_DOC.read_text(encoding="utf-8"))
+    return {row[0]: row[1:] for row in rows}
+
+
+def test_the_generated_taxonomy_reference_matches_the_module():
+    """The reference is what a model reads to choose a code; the module is what
+    accepts one. Nothing forced them to agree.
+
+    This is the incident the file's own header describes, one level up. The
+    codes previously lived in three places that disagreed and **40 findings
+    printed as `LAB009 — LAB009`** in a delivered report. The fix put the
+    definitions in one module and wrote the document from it -- by hand, once,
+    with a comment asking the next person to re-run a command. So the drift the
+    header warns about was still available to anyone who added a code and
+    forgot, which is exactly what it costs nothing to forget.
+    """
+    from lab_validator.taxonomy import BY_CODE
+
+    documented = _documented_codes()
+    assert set(documented) == set(BY_CODE), (
+        "references/taxonomy.md and taxonomy.py disagree about which codes exist: "
+        f"only in the doc {sorted(set(documented) - set(BY_CODE))}, "
+        f"only in the module {sorted(set(BY_CODE) - set(documented))}"
+    )
+    for code, verdict in BY_CODE.items():
+        name, domain, severity, definition = documented[code]
+        assert name == verdict.name, f"{code}: the doc calls it {name!r}"
+        assert domain == verdict.typical_domain, f"{code}: the doc says domain {domain!r}"
+        assert severity == (verdict.default_severity or "—"), (
+            f"{code}: the doc says severity {severity!r}"
+        )
+        assert definition == verdict.definition.replace("--", "—"), (
+            f"{code}: the doc's definition has drifted from the module's"
+        )
+
+
+def test_every_finding_code_is_reachable_from_the_skill_body():
+    """A code nothing tells a model to look for is a code nothing ever files.
+
+    Most codes need no prompting -- the step fails and the walk reaches for a
+    name. `LAB010` is recorded at a step that *succeeded*, so unless the body
+    asks the question at that moment it stays permanently unused, and the report
+    quietly loses its only signal that a passing lab is dating.
+    """
+    body = SKILL.read_text(encoding="utf-8")
+    assert "LAB010" in body, (
+        "nothing in the skill body asks whether a working path is the current "
+        "one, so LAB010 can never be filed"
+    )
+
+
 def test_every_referenced_reference_file_is_present():
     body = SKILL.read_text(encoding="utf-8")
     for name in set(re.findall(r"references/([a-z-]+\.md)", body)):

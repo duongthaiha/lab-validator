@@ -162,6 +162,40 @@ def render_domain_routing(add, findings: list[dict]) -> None:
 
 
 
+def render_ageing(add, findings: list[dict], label: dict[str, str] | None = None) -> None:
+    """Findings whose step *succeeded*, printed where a clean bill of health follows.
+
+    Every other code is discovered by something going wrong. This one is only
+    visible at a step that worked, which means a report can be entirely green
+    and still describe a lab built on an experience the product is retiring --
+    correct today, and wrong on a date somebody has already published. Left in
+    the findings list it inherits the severity it deserves, `info`, and `info`
+    is what a reader skips.
+
+    So it is lifted out and placed immediately before "Verified correct", to
+    qualify the passes that follow rather than trail after them. The numbering
+    is the global one, recomputed from the same sorted list the findings section
+    enumerates, because a finding that changes number between sections of the
+    same report cannot be discussed.
+    """
+    ageing = [(i, f) for i, f in enumerate(findings, 1) if f["verdict"] == "LAB010"]
+    if not ageing:
+        return
+    add("## Ageing guidance (works today)")
+    add("")
+    add("Nothing here stopped a learner. Each is a step that *succeeded* while "
+        "following a path the product has moved on from, so it dates the lab "
+        "rather than breaking it.")
+    add("")
+    for i, f in ageing:
+        where = f" *({label[f['segment']]})*" if label and f.get("segment") in label else ""
+        why = f.get("observed") or f.get("note") or "no detail recorded"
+        add(f"- **#{i}** {CODE_NAMES.get(f['verdict'], f['verdict'])}{where} — {why}")
+        if f.get("instructionRef"):
+            add(f"  <br>instruction: `{f['instructionRef']}`")
+    add("")
+
+
 def is_confirmation(step: dict) -> bool:
     """Is this step a deliberate judgement that an instruction matched reality?
 
@@ -296,6 +330,7 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
             if f.get("images"):
                 add("")
 
+    render_ageing(add, findings)
     passes = [s for s in steps if is_confirmation(s) and s.get("seq") not in retracted]
     add("## Verified correct")
     add("")
@@ -604,6 +639,7 @@ def render(run: Run, outline: Outline | None = None, anomalies: list[Anomaly] | 
         add("")
 
     # ---- verified correct ----------------------------------------------
+    render_ageing(add, findings, seg_title)
     passes = [s for s in steps if is_confirmation(s) and s.get("seq") not in retracted]
     add("## Verified correct")
     add("")

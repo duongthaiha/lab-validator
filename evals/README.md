@@ -26,7 +26,7 @@ with the observations already made. Same input every time, for every version of
 the skill, forever.
 
 That is affordable because of what the skill actually contributes. It does not
-implement browser control; the CLI does, and that has 907 offline unit tests.
+implement browser control; the CLI does, and that has 963 offline unit tests.
 What the skill contributes is two things:
 
 - **Operating** — drive the CLI, stay in the learner's path, capture evidence
@@ -70,6 +70,7 @@ What is planted, and which judgement rule each one probes:
 | A notebook cell green with no output and no artifact on disk | A green tick is not an observation. The most dangerous class. |
 | Quota refusal blocking a dependent step, walk continues past it | Blocked is a status; the blocker is the finding. |
 | 2 of 5 sections never selected | Coverage goes at the top, before any finding. |
+| A deployment step that **passed**, via a pane the portal calls `classic`, with a published retirement date | The one code a working step can carry. Filing it under "Verified correct" is the failure. |
 
 A skill-less run will typically report the transients, miss the model-identity
 mismatch or file it against the instructions, and open with findings rather than
