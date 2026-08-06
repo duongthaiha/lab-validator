@@ -17,10 +17,12 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import paths
+
 __all__ = ["Target", "TargetError", "Problem"]
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-TARGETS_DIR = REPO_ROOT / "targets"
+REPO_ROOT = paths.REPO_ROOT
+TARGETS_DIR = paths.TARGETS
 
 # Declared shape: key -> expected type. Unknown keys are reported rather than
 # ignored (in a file whose whole job is to carry expectations, a key nobody reads

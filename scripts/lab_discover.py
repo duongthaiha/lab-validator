@@ -30,8 +30,11 @@ from lab_validator.browser import (  # noqa: E402
     DEFAULT_CDP_PORT,
     BrowserError,
     attached_context,
+    script_main,
 )
 from lab_validator.discovery import (  # noqa: E402
+    HREFS_JS,
+    LINKS_JS,
     Enrolment,
     descriptor_for,
     parse_enrolments,
@@ -52,25 +55,6 @@ CAMPUS = "https://mslearningcampus.com"
 HOME_URL = f"{CAMPUS}/Pages/ms-learningcampus"
 TRAINING_HREF = re.compile(r"/User/CurrentTraining/\d+", re.I)
 TARGETS_DIR = REPO_ROOT / "targets"
-
-LINKS_JS = """() => {
-  const seen = new Set(), out = [];
-  document.querySelectorAll('a[href]').forEach(e => {
-    const text = (e.innerText || e.getAttribute('aria-label') || '').trim();
-    const href = e.getAttribute('href');
-    if (!href) return;
-    const key = text + '\\u0000' + href;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({text: text.slice(0, 120), href});
-  });
-  return out;
-}"""
-
-HREFS_JS = (
-    "() => Array.from(document.querySelectorAll('a[href]'))"
-    ".map(a => a.getAttribute('href') || '')"
-)
 
 
 async def session_page(context):
@@ -249,6 +233,7 @@ def rel(path: str) -> str:
     return str(Path(path).resolve().relative_to(REPO_ROOT)).replace("\\", "/")
 
 
+@script_main
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Discover launchable labs and scaffold a target descriptor.",
@@ -268,13 +253,9 @@ def main() -> int:
     p.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
     args = p.parse_args()
 
-    try:
-        if args.scaffold is not None:
-            return cmd_scaffold(args)
-        return cmd_list(args)
-    except BrowserError as exc:
-        print(f"\n{exc}", file=sys.stderr)
-        return 1
+    if args.scaffold is not None:
+        return cmd_scaffold(args)
+    return cmd_list(args)
 
 
 if __name__ == "__main__":

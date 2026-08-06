@@ -25,8 +25,8 @@ from playwright.async_api import async_playwright  # noqa: E402
 
 from lab_validator.browser import (  # noqa: E402
     DEFAULT_CDP_PORT,
-    BrowserError,
     attached_context,
+    script_main,
 )
 from lab_validator.labclient import LabClient  # noqa: E402
 
@@ -97,6 +97,7 @@ async def run(args) -> int:
             await browser.close()
 
 
+@script_main
 def main() -> int:
     p = argparse.ArgumentParser(description="Drive a running Skillable lab.")
     p.add_argument("--state", action="store_true", help="show lab and env state")
@@ -125,11 +126,7 @@ def main() -> int:
     ):
         args.state = True
 
-    try:
-        return asyncio.run(run(args))
-    except BrowserError as exc:
-        print(f"\n{exc}", file=sys.stderr)
-        return 1
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":

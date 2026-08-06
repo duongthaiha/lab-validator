@@ -764,9 +764,9 @@ src/lab_validator/console.py        what each action did to the screen; the debu
 src/lab_validator/debugread.py      read a finished run back and explain it
 src/lab_validator/browser.py        CDP launch/attach, profile management
 src/lab_validator/labclient.py      lab frames, window.api.v1, VM screen/click/type
-src/lab_validator/config.py         typed settings, SecretStr-backed
-src/lab_validator/secrets_store.py  DPAPI protect/unprotect helpers
-src/lab_validator/auth.py           storageState load/save, session health
+src/lab_validator/config.py         the one setting the tool reads, plus auth paths
+src/lab_validator/paths.py          one home for repo, runs and artifact paths
+src/lab_validator/auth.py           DPAPI secret storage, storageState, session health
 
 runs/<timestamp>/                   gitignored — screenshots contain live API keys
   trace.jsonl                       append-only, one record per step

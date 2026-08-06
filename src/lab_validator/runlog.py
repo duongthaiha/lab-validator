@@ -93,6 +93,14 @@ def _slug(text: str, limit: int = 40) -> str:
     return (out[:limit].rstrip("-")) or "step"
 
 
+class RunNotFound(FileNotFoundError):
+    """No run folder to work with.
+
+    Carries an operator-facing message that says what to do next, so callers
+    print it rather than compose their own.
+    """
+
+
 class Redactor:
     """Replaces known secret values with ``[REDACTED:label]`` markers.
 
@@ -254,6 +262,44 @@ class Run:
     def latest(cls, runs_root: Path) -> Run | None:
         runs = sorted(p for p in Path(runs_root).glob("*") if (p / "run.json").exists())
         return cls.open(runs[-1]) if runs else None
+
+    @classmethod
+    def open_or_latest(cls, runs_root: Path, arg: str | Path | None = None) -> Run:
+        """Open the run named by ``arg``, or the most recent under ``runs_root``.
+
+        Every entry point needs this and each used to inline its own version,
+        so the same mistake got four different answers depending on which
+        command you happened to type. Raises :class:`RunNotFound` carrying the
+        best message any of them had.
+
+        ``--run`` and ``--runs`` sit next to each other and mean opposite
+        things -- one folder versus the folder of folders -- so pointing
+        ``--run`` at a runs root is the mistake people actually make. It reads
+        as a crash rather than as a typo, so name the runs inside it: refuse,
+        and say what the real candidates were.
+        """
+        if arg:
+            path = Path(arg)
+            try:
+                return cls.open(path)
+            except FileNotFoundError as exc:
+                message = str(exc)
+                inside = sorted(
+                    p.name for p in path.glob("*") if (p / "run.json").is_file()
+                )
+                if inside:
+                    message += (
+                        f"\nthat looks like a runs root. It holds: {', '.join(inside)}"
+                        f"\ndid you mean --run {path / inside[-1]}?"
+                    )
+                raise RunNotFound(message) from exc
+
+        run = cls.latest(Path(runs_root))
+        if run is None:
+            raise RunNotFound(
+                f"no run found under {runs_root}; start one with `lab-validator run --start`"
+            )
+        return run
 
     def finish(self, status: str = "complete", note: str | None = None) -> None:
         self.manifest["status"] = status

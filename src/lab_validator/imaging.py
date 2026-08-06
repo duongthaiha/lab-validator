@@ -90,11 +90,3 @@ def save_view(png: bytes, path: Path, width: int = VIEW_WIDTH) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     _resize(_open(png), width).save(out, "JPEG", quality=VIEW_QUALITY, optimize=True)
     return out
-
-
-def crop_view(png: bytes, path: Path, box: tuple[int, int, int, int]) -> Path:
-    """Write a cropped reader copy - for reading fine detail the full frame loses."""
-    out = path.parent.parent / "view" / (path.stem + "-crop.jpg")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    _open(png).crop(box).save(out, "JPEG", quality=88, optimize=True)
-    return out

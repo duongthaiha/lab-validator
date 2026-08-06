@@ -25,7 +25,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from lab_validator.browser import (  # noqa: E402
     DEFAULT_CDP_PORT,
     PROFILE_DIR,
-    BrowserError,
     attached_context,
     browser_is_running,
     cdp_endpoint,
@@ -35,8 +34,10 @@ from lab_validator.browser import (  # noqa: E402
     list_profiles,
     port_is_open,
     resolve_profile,
+    script_main,
 )
 from lab_validator.config import REPO_ROOT, get_settings  # noqa: E402
+from lab_validator.discovery import LINKS_JS  # noqa: E402
 
 SHOT_DIR = REPO_ROOT / "artifacts" / "recon"
 
@@ -231,21 +232,6 @@ def cmd_signin(args) -> int:
     return asyncio.run(_with_context(args.port, _flow))
 
 
-LINKS_JS = """() => {
-  const seen = new Set(), out = [];
-  document.querySelectorAll('a').forEach(e => {
-    const text = (e.innerText || e.getAttribute('aria-label') || '').trim();
-    const href = e.getAttribute('href');
-    if (!text || !href) return;
-    const key = text + '\\u0000' + href;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({text: text.slice(0, 60), href,
-              visible: !!(e.offsetWidth || e.offsetHeight)});
-  });
-  return out;
-}"""
-
 DUMP_JS = """() => {
   const describe = e => ({
     tag: e.tagName,
@@ -287,15 +273,18 @@ def cmd_links(args) -> int:
 
     async def _links(context):
         page = context.pages[args.tab] if context.pages else await context.new_page()
-        links = await page.evaluate(LINKS_JS)
+        # The shared extractor keeps untexted anchors and a generous slice; this
+        # view has always shown only labelled links, truncated to 60.
+        links = [e for e in await page.evaluate(LINKS_JS) if e["text"]]
         print(f"{await page.title()}\n{page.url}\n")
         for entry in links:
+            text = entry["text"][:60]
             if args.filter and args.filter.lower() not in (
-                entry["text"] + entry["href"]
+                text + entry["href"]
             ).lower():
                 continue
             mark = " " if entry["visible"] else "."
-            print(f" {mark} {entry['text']:<45} {entry['href']}")
+            print(f" {mark} {text:<45} {entry['href']}")
         print(f"\n{len(links)} link(s).  '.' = not visible (e.g. collapsed nav)")
         return 0
 
@@ -471,6 +460,7 @@ def cmd_probe(args) -> int:
     return asyncio.run(_with_context(args.port, _probe))
 
 
+@script_main
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--launch", action="store_true", help="start the debug browser")
@@ -515,29 +505,25 @@ def main() -> int:
     p.add_argument("--browser", choices=["edge", "chrome"], default="edge")
     args = p.parse_args()
 
-    try:
-        if args.list_profiles:
-            return cmd_list_profiles(args)
-        if args.launch:
-            return cmd_launch(args)
-        if args.signin:
-            return cmd_signin(args)
-        if args.probe:
-            return cmd_probe(args)
-        if args.shot:
-            return cmd_shot(args)
-        if args.goto:
-            return cmd_goto(args)
-        if args.click:
-            return cmd_click(args)
-        if args.links:
-            return cmd_links(args)
-        if args.dump:
-            return cmd_dump(args)
-        return cmd_status(args)
-    except BrowserError as exc:
-        print(f"\n{exc}", file=sys.stderr)
-        return 1
+    if args.list_profiles:
+        return cmd_list_profiles(args)
+    if args.launch:
+        return cmd_launch(args)
+    if args.signin:
+        return cmd_signin(args)
+    if args.probe:
+        return cmd_probe(args)
+    if args.shot:
+        return cmd_shot(args)
+    if args.goto:
+        return cmd_goto(args)
+    if args.click:
+        return cmd_click(args)
+    if args.links:
+        return cmd_links(args)
+    if args.dump:
+        return cmd_dump(args)
+    return cmd_status(args)
 
 
 if __name__ == "__main__":

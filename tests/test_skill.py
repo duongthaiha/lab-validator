@@ -70,18 +70,24 @@ def documented() -> list[tuple[str, str]]:
 def flags_of(command: str) -> set[str]:
     """The real long options a sub-command accepts.
 
-    Scraped rather than listed. A hand-kept copy of a flag list is a second
+    Derived rather than listed. A hand-kept copy of a flag list is a second
     source of truth that goes stale silently, and this test exists precisely to
     catch documentation drifting from code — it should not be the thing drifting.
+
+    For built-ins this now *builds the parser and asks it*, rather than scraping
+    `add_argument("--…")` calls out of `main()` with a regex. The regex had to
+    be taught about shared flag helpers once already; a parser cannot lie about
+    what it accepts.
     """
     if command in cli.BUILTINS:
-        src = Path(cli.__file__).read_text(encoding="utf-8")
-        # main() builds each built-in's parser inside its own dispatch block.
-        blocks = src.split('if args.command == "')
-        block = next((b for b in blocks if b.startswith(f'{command}"')), None)
-        assert block is not None, f"no dispatch block for built-in {command!r}"
-        block = block.split("return ", 1)[0]
-        return set(re.findall(r'add_argument\(\s*"(--[a-z][a-z0-9-]*)"', block)) | {"--help"}
+        build, _handler = cli.BUILTIN_PARSERS[command]
+        parser = build()
+        return {
+            option
+            for action in parser._actions
+            for option in action.option_strings
+            if option.startswith("--")
+        }
     module = cli._load(cli.COMMANDS[command][0])
     src = (cli.SCRIPTS / cli.COMMANDS[command][0]).read_text(encoding="utf-8")
     assert module is not None

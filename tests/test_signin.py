@@ -529,13 +529,10 @@ def test_every_action_the_dispatcher_handles_is_in_the_help():
     concludes the capability is absent and reaches for a bypass instead -- which
     is exactly the behaviour the learner-path rule exists to prevent.
     """
-    body = (ROOT / "scripts" / "lab_step.py").read_text(encoding="utf-8")
-    dispatch = body.split("HELP = ", 1)[1].split('"""', 3)[-1]
-    handled = set(re.findall(r'verb (?:==|in) \(?"(\w+)"', dispatch))
-    handled |= {
-        v for group in re.findall(r'verb in \(([^)]+)\)', dispatch)
-        for v in re.findall(r'"(\w+)"', group)
-    }
+    # The engine's own table, not a scrape of it: the dispatch used to be an
+    # if/elif chain that could only be read as text, and the regex that read it
+    # went stale the moment the chain became a dict.
+    handled = set(_lab_step().ACTIONS)
 
     documented = set(re.findall(r"^  (\w+)[: \[]", _lab_step().HELP, re.M))
 
@@ -551,13 +548,7 @@ def test_the_help_does_not_promise_an_action_that_does_not_exist():
     A documented action that no longer dispatches fails mid-walk, against a
     running lab clock, with a human waiting.
     """
-    body = (ROOT / "scripts" / "lab_step.py").read_text(encoding="utf-8")
-    dispatch = body.split("HELP = ", 1)[1].split('"""', 3)[-1]
-    handled = set(re.findall(r'verb (?:==|in) \(?"(\w+)"', dispatch))
-    handled |= {
-        v for group in re.findall(r'verb in \(([^)]+)\)', dispatch)
-        for v in re.findall(r'"(\w+)"', group)
-    }
+    handled = set(_lab_step().ACTIONS)
 
     documented = set(re.findall(r"^  (\w+)[: \[]", _lab_step().HELP, re.M))
     # `until` probes are listed in the same indented style but are arguments to

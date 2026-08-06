@@ -19,6 +19,7 @@ no interactive profile exists.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import shutil
@@ -120,6 +121,31 @@ _CLONE_DROP_FILES = {
 
 class BrowserError(RuntimeError):
     """Raised when a browser cannot be launched or reached."""
+
+
+def script_main(fn):
+    """Turn a script's ``main`` into one that reports :class:`BrowserError`.
+
+    Five scripts each ended with the same three lines -- catch ``BrowserError``,
+    print it to stderr with a leading blank line, return 1 -- wrapped around
+    their whole dispatch chain. That is a policy ("a browser we cannot reach is
+    an operator problem, not a traceback"), and policies belong in one place.
+
+    It stays a decorator rather than an ``if __name__`` wrapper because
+    ``cli._delegate`` calls ``module.main()`` directly and wants the exit code
+    back as an ``int``; raising ``SystemExit`` there would escape the
+    dispatcher.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs) -> int:
+        try:
+            return fn(*args, **kwargs)
+        except BrowserError as exc:
+            print(f"\n{exc}", file=sys.stderr)
+            return 1
+
+    return wrapper
 
 
 @dataclass(frozen=True)

@@ -12,8 +12,8 @@ exercised" — not to stop anything happening.
 
 from __future__ import annotations
 
+import importlib.util
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -197,19 +197,19 @@ def test_recording_an_unknown_capability_fails_loudly():
 
 
 def _step_verbs() -> set[str]:
-    """Every verb `lab_step.py`'s action loop handles, read from its source.
+    """Every verb `lab_step.py`'s action loop handles, read from the engine.
 
     Derived rather than listed, so adding a verb to the engine and forgetting to
-    classify it fails here instead of silently costing coverage.
+    classify it fails here instead of silently costing coverage. This used to
+    scrape the source of an if/elif chain; the chain is now a dict, so it reads
+    the dict -- the thing that actually decides, not a description of it.
     """
-    src = (Path(__file__).resolve().parents[1] / "scripts" / "lab_step.py").read_text(
-        encoding="utf-8"
+    spec = importlib.util.spec_from_file_location(
+        "lab_step_verbs", Path(__file__).resolve().parents[1] / "scripts" / "lab_step.py"
     )
-    body = src[src.index("async def run_actions"):src.index("async def main_async")]
-    verbs: set[str] = set()
-    for group in re.findall(r'verb (?:==|in) \(?((?:"[a-z]+"(?:, )?)+)\)?', body):
-        verbs |= set(re.findall(r'"([a-z]+)"', group))
-    return verbs
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return set(module.ACTIONS)
 
 
 def test_every_step_verb_declares_a_capability():

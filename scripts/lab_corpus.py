@@ -21,13 +21,11 @@ from lab_validator.browser import (  # noqa: E402
     DEFAULT_CDP_PORT,
     BrowserError,
     attached_context,
+    script_main,
 )
 from lab_validator.corpus import Outline, extract  # noqa: E402
 from lab_validator.labclient import LabClient  # noqa: E402
-
-ROOT = Path(__file__).resolve().parents[1]
-OUTLINE = ROOT / "artifacts" / "instructions" / "outline.json"
-MARKDOWN = ROOT / "artifacts" / "instructions" / "outline.md"
+from lab_validator.paths import MARKDOWN, OUTLINE  # noqa: E402
 
 
 async def do_extract(port: int) -> Outline:
@@ -55,6 +53,7 @@ def load() -> Outline:
     return Outline.load(OUTLINE)
 
 
+@script_main
 def main() -> int:
     p = argparse.ArgumentParser(description="Inspect a lab's instruction outline.")
     p.add_argument("--extract", action="store_true", help="read from the live lab")
@@ -66,52 +65,48 @@ def main() -> int:
     p.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
     args = p.parse_args()
 
-    try:
-        outline = asyncio.run(do_extract(args.port)) if args.extract else load()
+    outline = asyncio.run(do_extract(args.port)) if args.extract else load()
 
-        if args.outline:
-            for h in outline.headings:
-                if h.level <= 3:
-                    print(f"{'  ' * (h.level - 1)}h{h.level} {h.text[:70]}  [{h.id[:40]}]")
+    if args.outline:
+        for h in outline.headings:
+            if h.level <= 3:
+                print(f"{'  ' * (h.level - 1)}h{h.level} {h.text[:70]}  [{h.id[:40]}]")
 
-        if args.segments:
-            segments = outline.segments()
-            print(f"{'id':<34} {'module':<26} title")
-            print("-" * 100)
-            for s in segments:
-                print(f"{s.id:<34} {(s.module or '-')[:25]:<26} {s.title[:38]}")
-            print(f"\n{len(segments)} segments")
+    if args.segments:
+        segments = outline.segments()
+        print(f"{'id':<34} {'module':<26} title")
+        print("-" * 100)
+        for s in segments:
+            print(f"{s.id:<34} {(s.module or '-')[:25]:<26} {s.title[:38]}")
+        print(f"\n{len(segments)} segments")
 
-        if args.anomalies:
-            found = outline.anomalies()
-            for a in found:
-                print(f"[{a.code}] {a.severity:<8} {a.message}")
-            print(f"\n{len(found)} structural anomalies")
+    if args.anomalies:
+        found = outline.anomalies()
+        for a in found:
+            print(f"[{a.code}] {a.severity:<8} {a.message}")
+        print(f"\n{len(found)} structural anomalies")
 
-        if args.section:
-            needle = args.section.lstrip("#")
-            match = None
-            for seg in outline.segments():
-                if needle in (seg.id, (seg.anchor or "").lstrip("#")) or seg.id.startswith(needle):
-                    match = outline.section_by_anchor((seg.anchor or "").lstrip("#"))
-                    break
-            if match is None:
-                match = outline.by_id(needle)
-            if match is None:
-                print(f"no section matching {args.section!r}", file=sys.stderr)
-                return 1
-            if args.tasks:
-                for t in outline.tasks(match):
-                    print(f"  {t.text}")
-            else:
-                print(outline.section_text(match))
+    if args.section:
+        needle = args.section.lstrip("#")
+        match = None
+        for seg in outline.segments():
+            if needle in (seg.id, (seg.anchor or "").lstrip("#")) or seg.id.startswith(needle):
+                match = outline.section_by_anchor((seg.anchor or "").lstrip("#"))
+                break
+        if match is None:
+            match = outline.by_id(needle)
+        if match is None:
+            print(f"no section matching {args.section!r}", file=sys.stderr)
+            return 1
+        if args.tasks:
+            for t in outline.tasks(match):
+                print(f"  {t.text}")
+        else:
+            print(outline.section_text(match))
 
-        if not any([args.extract, args.segments, args.anomalies, args.outline, args.section]):
-            print(f"{len(outline.headings)} headings, {len(outline.sections())} sections")
-        return 0
-    except BrowserError as exc:
-        print(f"\n{exc}", file=sys.stderr)
-        return 1
+    if not any([args.extract, args.segments, args.anomalies, args.outline, args.section]):
+        print(f"{len(outline.headings)} headings, {len(outline.sections())} sections")
+    return 0
 
 
 if __name__ == "__main__":

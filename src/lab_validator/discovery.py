@@ -33,7 +33,40 @@ __all__ = [
     "enrolment_from_own_page",
     "scaffold",
     "descriptor_for",
+    "LINKS_JS",
+    "HREFS_JS",
 ]
+
+#: Extract every ``(text, href, visible)`` triple on a page.
+#:
+#: One canonical extractor, because three callers used to carry near-identical
+#: copies that had quietly drifted apart in selector, truncation width and
+#: whether they reported visibility -- so "the same" enumeration returned
+#: different things depending on which script asked. This is the superset:
+#: anchors that have an ``href``, text truncated generously, visibility
+#: reported. Callers that want less filter it themselves rather than fork the
+#: JavaScript again.
+LINKS_JS = """() => {
+  const seen = new Set(), out = [];
+  document.querySelectorAll('a[href]').forEach(e => {
+    const text = (e.innerText || e.getAttribute('aria-label') || '').trim();
+    const href = e.getAttribute('href');
+    if (!href) return;
+    const key = text + '\\u0000' + href;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({text: text.slice(0, 120), href,
+              visible: !!(e.offsetWidth || e.offsetHeight)});
+  });
+  return out;
+}"""
+
+#: Just the ``href`` values, for cheap presence checks such as "does this tab
+#: offer /User/Logout", where the text and visibility are irrelevant.
+HREFS_JS = (
+    "() => Array.from(document.querySelectorAll('a[href]'))"
+    ".map(a => a.getAttribute('href') || '')"
+)
 
 #: ``/ClassEnrollment/5928204`` -- the launch entry point for one enrolment.
 ENROLMENT_RE = re.compile(r"/ClassEnrollment/(\d+)\b", re.I)
@@ -123,8 +156,8 @@ def slugify(title: str) -> str:
 def parse_enrolments(links: list[dict]) -> list[Enrolment]:
     """Pick the launchable enrolments out of a flat list of anchor records.
 
-    ``links`` is what ``LINKS_JS`` in ``scripts/browser_session.py`` returns:
-    dicts with ``text`` and ``href``. Several anchors on the page point at the
+    ``links`` is what :data:`LINKS_JS` above returns: dicts with ``text`` and
+    ``href``. Several anchors on the page point at the
     same enrolment (title link, a "Launch" button, a thumbnail), so results are
     collapsed by enrolment id and the longest human title wins -- a "Launch"
     label identifies the row but does not name the workshop.

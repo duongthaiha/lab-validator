@@ -1,78 +1,60 @@
-"""Typed configuration for the lab validator.
+"""Settings the tool actually reads.
 
-Secrets use :class:`pydantic.SecretStr`, which renders as ``**********`` in
-reprs and log output — an accidental ``print(settings)`` cannot leak a key.
+This was once a `pydantic-settings` model with fourteen fields covering a
+Skillable Connect API, a Skillable TMS API, Azure subscription/tenant ids and a
+headless/log-level/artifact-retention runtime block. Exactly one of them was
+ever read: `learning_campus_url`. The rest described an integration the tool
+does not have -- it drives a real browser rather than calling Skillable's API --
+so they were a config surface promising capabilities that did not exist, plus a
+dependency to install for the privilege.
 
-Resolution order: real environment variables > ``.env`` file > defaults.
+What remains is one setting, still overridable from the environment or a `.env`
+file the same way, and the two paths for the encrypted Learning Campus session.
+`get_settings` keeps its name and its `.learning_campus_url` attribute so the
+three call sites did not have to change.
 """
 
 from __future__ import annotations
 
+import os
+from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from .paths import REPO_ROOT
 
 #: DPAPI-encrypted Playwright storageState for Microsoft Learning Campus.
 AUTH_DIR = REPO_ROOT / ".auth"
 LEARNING_CAMPUS_STATE = AUTH_DIR / "mslearningcampus.state.enc"
 
+DEFAULT_LEARNING_CAMPUS_URL = "https://mslearningcampus.com/Pages/ms-learningcampus"
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=REPO_ROOT / ".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-        populate_by_name=True,
-    )
 
-    # --- Skillable Connect LAB API ---------------------------------------
-    skillable_api_key: SecretStr | None = Field(default=None, alias="LV_SKILLABLE_API_KEY")
-    skillable_api_base: str = Field(
-        default="https://labondemand.com/api/v3", alias="LV_SKILLABLE_API_BASE"
-    )
-    skillable_tms_api_key: SecretStr | None = Field(
-        default=None, alias="LV_SKILLABLE_TMS_API_KEY"
-    )
-    skillable_tms_api_base: str = Field(
-        default="https://lms.learnondemand.net/api/2.0", alias="LV_SKILLABLE_TMS_API_BASE"
-    )
-    skillable_user_id: str = Field(default="lab-validator", alias="LV_SKILLABLE_USER_ID")
-    skillable_user_email: str | None = Field(default=None, alias="LV_SKILLABLE_USER_EMAIL")
+def _dotenv(name: str) -> str | None:
+    """Read one key from `.env`, if there is one.
 
-    # --- Learning Campus --------------------------------------------------
-    learning_campus_url: str = Field(
-        default="https://mslearningcampus.com/Pages/ms-learningcampus",
-        alias="LV_LEARNING_CAMPUS_URL",
-    )
+    Deliberately not a parser: `.env` here carries a single optional URL, and a
+    real environment variable wins anyway. Quoting and interpolation are not
+    supported because nothing in the file needs them.
+    """
+    path = REPO_ROOT / ".env"
+    if not path.is_file():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() == name:
+            return value.strip().strip("'\"") or None
+    return None
 
-    # --- Azure oracle -----------------------------------------------------
-    # Intentionally no client secret: use DefaultAzureCredential (az login
-    # locally, OIDC federation in CI).
-    azure_subscription_id: str | None = Field(default=None, alias="AZURE_SUBSCRIPTION_ID")
-    azure_tenant_id: str | None = Field(default=None, alias="AZURE_TENANT_ID")
 
-    # --- Runtime ----------------------------------------------------------
-    headless: bool = Field(default=True, alias="LV_HEADLESS")
-    log_level: str = Field(default="INFO", alias="LV_LOG_LEVEL")
-    artifact_retention: str = Field(default="on-failure", alias="LV_ARTIFACT_RETENTION")
-
-    def require_skillable_api_key(self) -> str:
-        if self.skillable_api_key is None:
-            raise RuntimeError(
-                "LV_SKILLABLE_API_KEY is not set. Copy .env.example to .env and "
-                "fill it in, or export it in your shell."
-            )
-        return self.skillable_api_key.get_secret_value()
-
-    def skillable_headers(self) -> dict[str, str]:
-        """Headers for a Skillable Connect LAB API request."""
-        return {"api_key": self.require_skillable_api_key(), "Accept": "application/json"}
+@dataclass(frozen=True)
+class Settings:
+    learning_campus_url: str = DEFAULT_LEARNING_CAMPUS_URL
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    url = os.environ.get("LV_LEARNING_CAMPUS_URL") or _dotenv("LV_LEARNING_CAMPUS_URL")
+    return Settings(learning_campus_url=url or DEFAULT_LEARNING_CAMPUS_URL)

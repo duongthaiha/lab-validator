@@ -24,19 +24,15 @@ from lab_validator.browser import (  # noqa: E402
     DEFAULT_CDP_PORT,
     BrowserError,
     attached_context,
+    script_main,
 )
 from lab_validator.corpus import Outline, extract  # noqa: E402
 from lab_validator.labclient import LabClient  # noqa: E402
+from lab_validator.paths import MARKDOWN, OUTLINE, RUNS, TARGETS  # noqa: E402
 from lab_validator.report import render, write_segment  # noqa: E402
-from lab_validator.runlog import Run  # noqa: E402
+from lab_validator.runlog import Run, RunNotFound  # noqa: E402
 from lab_validator.targets import Target, TargetError  # noqa: E402
 from lab_validator.vault import Vault  # noqa: E402
-
-ROOT = Path(__file__).resolve().parents[1]
-RUNS = ROOT / "runs"
-TARGETS = ROOT / "targets"
-OUTLINE = ROOT / "artifacts" / "instructions" / "outline.json"
-MARKDOWN = ROOT / "artifacts" / "instructions" / "outline.md"
 
 
 def load_target(slug: str) -> Target:
@@ -138,10 +134,10 @@ async def cmd_start(args) -> int:
 
 
 def latest(args) -> Run:
-    run = Run.open(args.run) if args.run else Run.latest(RUNS)
-    if run is None:
-        raise BrowserError("No run folder yet. Start one with --start.")
-    return run
+    try:
+        return Run.open_or_latest(RUNS, args.run)
+    except RunNotFound as exc:
+        raise BrowserError(str(exc)) from exc
 
 
 def cmd_status(args) -> int:
@@ -211,6 +207,7 @@ def cmd_finish(args) -> int:
     return cmd_report(args)
 
 
+@script_main
 def main() -> int:
     p = argparse.ArgumentParser(description="Start, inspect and report on a validation run.")
     p.add_argument("--start", action="store_true", help="create a run from the live lab")
@@ -232,23 +229,19 @@ def main() -> int:
     p.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
     args = p.parse_args()
 
-    try:
-        if args.targets or args.check_target:
-            return cmd_targets(args)
-        if args.start:
-            return asyncio.run(cmd_start(args))
-        if args.retract is not None:
-            return cmd_retract(args)
-        if args.finish:
-            return cmd_finish(args)
-        if args.report:
-            return cmd_report(args)
-        if args.next:
-            return cmd_next(args)
-        return cmd_status(args)
-    except BrowserError as exc:
-        print(f"\n{exc}", file=sys.stderr)
-        return 1
+    if args.targets or args.check_target:
+        return cmd_targets(args)
+    if args.start:
+        return asyncio.run(cmd_start(args))
+    if args.retract is not None:
+        return cmd_retract(args)
+    if args.finish:
+        return cmd_finish(args)
+    if args.report:
+        return cmd_report(args)
+    if args.next:
+        return cmd_next(args)
+    return cmd_status(args)
 
 
 if __name__ == "__main__":

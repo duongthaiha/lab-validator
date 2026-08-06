@@ -53,13 +53,10 @@ from lab_validator.labclient import (  # noqa: E402
     closed_reason,
 )
 from lab_validator.learnerpath import Ledger
+from lab_validator.paths import OUTLINE, RUNS  # noqa: E402
 from lab_validator.report import write_segment  # noqa: E402
-from lab_validator.runlog import DOMAINS, FINDING_VERDICTS, Run  # noqa: E402
+from lab_validator.runlog import DOMAINS, FINDING_VERDICTS, Run, RunNotFound  # noqa: E402
 from lab_validator.vault import SIGNIN_FIELDS, Vault, VaultError  # noqa: E402
-
-ROOT = Path(__file__).resolve().parents[1]
-RUNS = ROOT / "runs"
-OUTLINE = ROOT / "artifacts" / "instructions" / "outline.json"
 
 
 def refresh_section_report(run: Run, segment_id: str) -> Path | None:
@@ -397,12 +394,263 @@ async def do_signin(lab: LabClient, run: Run, segment: str, arg: str) -> int:
     return 0
 
 
+class Step:
+    """Everything a verb handler needs, so handlers can take (step, arg).
+
+    The action loop used to be one 148-line if/elif chain over twelve verbs.
+    Each arm closed over the same six locals, which is why it could not be
+    broken up without threading all six through by hand. Naming that set once
+    lets every verb become a small function that can be read -- and tested --
+    on its own, and lets `ACTIONS` below be the single list of what the engine
+    understands, derived rather than restated.
+
+    Deliberately not a dataclass: `cli._load` executes this file under a
+    synthetic module name that is never put in `sys.modules`, and
+    `dataclasses` resolves string annotations through there, so the decorator
+    raises at import time. A hand-written `__init__` costs four lines.
+    """
+
+    def __init__(
+        self,
+        lab: LabClient,
+        run: Run,
+        segment: str,
+        label: str,
+        watch: ConsoleWatch | None = None,
+        log: DebugLog | None = None,
+    ):
+        self.lab = lab
+        self.run = run
+        self.segment = segment
+        self.label = label
+        self.watch = watch
+        self.log = log
+
+    async def capture(self, label: str | None = None):
+        return await capture(
+            self.lab, self.run, self.segment, label or self.label, self.watch, self.log
+        )
+
+
+def coords(verb: str, arg: str, need: int) -> list[int]:
+    """Parse `x,y[,delta]`, refusing rather than crashing.
+
+    `scroll:400` and `click:Not now` used to reach `int(...)` and raise a raw
+    `IndexError`/`ValueError`. A traceback in the middle of a walk reads as
+    "the tool broke" when the truth is "that is not what this verb takes", and
+    the operator learns nothing about the right form. So the error names the
+    verb, shows what arrived, and gives the shape.
+    """
+    parts = [p.strip() for p in arg.split(",") if p.strip()]
+    shape = "x,y" if need == 2 else "x,y[,delta]"
+    try:
+        values = [int(p) for p in parts]
+    except ValueError as exc:
+        raise Stop(
+            f"{verb}:{arg!r} takes screen coordinates, not text -- {shape}.\n"
+            f"    example: {verb}:640,400\n"
+            "    There is no click-by-text on the VM: it is a video frame, not a\n"
+            "    DOM. Take a `shot`, read the pixel position, then click it."
+        ) from exc
+    if len(values) < need:
+        raise Stop(
+            f"{verb}:{arg!r} needs {shape} -- {len(values)} value(s) given.\n"
+            f"    example: {verb}:640,400"
+        )
+    return values
+
+
+async def _do_click(step: Step, arg: str) -> int:
+    x, y = coords("click", arg, 2)[:2]
+    await step.lab.click(x, y)
+    step.run.step(step.segment, action=f"click:{x},{y}", surface="vm")
+    return 0
+
+
+async def _do_dblclick(step: Step, arg: str) -> int:
+    x, y = coords("dblclick", arg, 2)[:2]
+    await step.lab.click(x, y, double=True)
+    step.run.step(step.segment, action=f"dblclick:{x},{y}", surface="vm")
+    return 0
+
+
+async def _do_move(step: Step, arg: str) -> int:
+    x, y = coords("move", arg, 2)[:2]
+    await step.lab.move(x, y)
+    step.run.step(step.segment, action=f"move:{x},{y}", surface="vm")
+    return 0
+
+
+async def _do_scroll(step: Step, arg: str) -> int:
+    parts = coords("scroll", arg, 2)
+    x, y = parts[0], parts[1]
+    delta = parts[2] if len(parts) > 2 else 400
+    await step.lab.wheel(x, y, delta)
+    step.run.step(step.segment, action=f"scroll:{x},{y},{delta}", surface="vm")
+    return 0
+
+
+async def _do_focus(step: Step, arg: str) -> int:
+    await step.lab.focus_vm()
+    step.run.step(step.segment, action="focus", surface="vm")
+    return 0
+
+
+async def _do_type(step: Step, arg: str) -> int:
+    await step.lab.type(arg)
+    step.run.step(step.segment, action=f"type:{arg}", surface="vm")
+    return 0
+
+
+async def _do_cred(step: Step, arg: str) -> int:
+    value = await resolve_credential(step.lab, step.run, arg)
+    step.run.redactor.add(value, arg.replace("/", "-").lower())
+    await step.lab.type(value)
+    step.run.step(
+        step.segment, action=f"cred:{arg}", surface="vm", note=f"{len(value)} chars"
+    )
+    return 0
+
+
+async def _do_signin(step: Step, arg: str) -> int:
+    return await do_signin(step.lab, step.run, step.segment, arg.strip().lower())
+
+
+async def _do_key(step: Step, arg: str) -> int:
+    keys = [k.strip() for k in arg.split("+")] if "+" not in arg else [arg]
+    await step.lab.key(*keys)
+    step.run.step(step.segment, action=f"key:{arg}", surface="vm")
+    return 0
+
+
+async def _do_wait(step: Step, arg: str) -> int:
+    if not arg.strip().isdigit():
+        raise Stop(f"wait:{arg!r} takes milliseconds.\n    example: wait:2000")
+    await asyncio.sleep(int(arg) / 1000)
+    step.run.step(step.segment, action=f"wait:{arg}", surface="vm")
+    return 0
+
+
+async def _do_until(step: Step, arg: str) -> int:
+    name, _, rest = arg.partition(":")
+    budget_s = 300.0
+    probe_arg = rest
+    if rest and rest.rsplit(":", 1)[-1].isdigit() and ":" in rest:
+        probe_arg, budget_s = rest.rsplit(":", 1)[0], float(rest.rsplit(":", 1)[1])
+    elif rest.isdigit() and name == "connected":
+        probe_arg, budget_s = "", float(rest)
+    probe = PROBES.get(name)
+    if probe is None:
+        raise Stop(f"unknown probe {name!r}; known: {sorted(PROBES)}")
+    started = time.monotonic()
+    ok = await probe(step.lab, step.run, step.segment, probe_arg, budget_s)
+    elapsed = time.monotonic() - started
+    if ok:
+        step.run.step(
+            step.segment,
+            action=f"until:{arg}",
+            surface="probe",
+            note=f"settled after {elapsed:.0f}s",
+        )
+        return 0
+    shot = await step.capture(f"{step.label}-timeout")
+    step.run.step(
+        step.segment,
+        verdict="LAB007",
+        severity="major",
+        action=f"until:{arg}",
+        surface="probe",
+        images=[shot],
+        note=f"did not complete within {budget_s:.0f}s",
+    )
+    print(f"  ! LAB007 {arg} did not complete within {budget_s:.0f}s")
+    return 1
+
+
+async def _do_dialog(step: Step, arg: str) -> int:
+    text = await step.lab.dismiss_dialog()
+    step.run.step(
+        step.segment,
+        action="dialog",
+        surface="dom",
+        observed={"kind": "dialog", "value": text},
+    )
+    if text:
+        print(f"  dialog: {text[:160]}")
+    return 0
+
+
+async def _do_page(step: Step, arg: str) -> int:
+    if not arg.strip().isdigit():
+        raise Stop(f"page:{arg!r} takes an instruction page number.\n    example: page:3")
+    await step.lab.goto_page(int(arg))
+    step.run.step(step.segment, action=f"page:{arg}", surface="dom")
+    return 0
+
+
+async def _do_read(step: Step, arg: str) -> int:
+    # The learner's way through the instruction pane. `page:` is faster
+    # and exact, which is exactly why it is a bypass: it never touches
+    # the pane's own navigation, so a pane that will not scroll reads as
+    # a clean section.
+    scrolled = await step.lab.scroll_instructions(int(arg) if arg else 600)
+    if scrolled.stuck:
+        step.run.step(
+            step.segment, verdict="LAB003", severity="major", domain="setup",
+            action=f"read:{arg or 600}", surface="dom",
+            note=scrolled.describe(),
+        )
+        print(f"  !! {scrolled.describe()}")
+        return 1
+    # A section that fits its pane still counts as read the learner's way --
+    # there was no scroll for the learner to be denied. Reporting it as a
+    # defect is how the first live run filed a major finding against a page
+    # that was simply short.
+    step.run.step(step.segment, action=f"read:{arg or 600}", surface="dom",
+                  note=scrolled.describe())
+    return 0
+
+
+async def _do_shot(step: Step, arg: str) -> int:
+    shot = await step.capture(arg or step.label)
+    step.run.step(step.segment, action="shot", surface="vm", images=[shot])
+    print(f"  -> {shot.relative_to(step.run.dir)}")
+    if step.watch is not None and step.watch.intervals:
+        last = step.watch.intervals[-1]
+        if step.log is not None and step.log.verbose:
+            print(f"     {last.describe()}")
+    return 0
+
+
+#: verb -> handler. The engine's vocabulary, in one place, so `--help`, the
+#: capability ledger and the tests can all read the same list instead of each
+#: keeping a copy that drifts.
+ACTIONS = {
+    "click": _do_click,
+    "dblclick": _do_dblclick,
+    "move": _do_move,
+    "scroll": _do_scroll,
+    "focus": _do_focus,
+    "type": _do_type,
+    "cred": _do_cred,
+    "signin": _do_signin,
+    "key": _do_key,
+    "wait": _do_wait,
+    "until": _do_until,
+    "dialog": _do_dialog,
+    "page": _do_page,
+    "read": _do_read,
+    "shot": _do_shot,
+}
+
+
 async def run_actions(
     lab: LabClient, run: Run, segment: str, label: str, actions: list[str],
     ledger: Ledger | None = None,
     watch: ConsoleWatch | None = None, log: DebugLog | None = None,
 ) -> int:
     findings = 0
+    step = Step(lab=lab, run=run, segment=segment, label=label, watch=watch, log=log)
     # Which channels this step used, so the run can state what it did *not*
     # exercise. Owned by the caller because the coverage claim belongs to the
     # whole walk, and this function is one step of many.
@@ -417,133 +665,10 @@ async def run_actions(
             # capture it happens to precede.
             watch.did(raw)
 
-        if verb in ("click", "dblclick", "move"):
-            x, y = (int(v) for v in arg.split(","))
-            if verb == "click":
-                await lab.click(x, y)
-            elif verb == "dblclick":
-                await lab.click(x, y, double=True)
-            else:
-                await lab.move(x, y)
-            run.step(segment, action=f"{verb}:{x},{y}", surface="vm")
-
-        elif verb == "scroll":
-            parts = [p.strip() for p in arg.split(",")]
-            x, y = int(parts[0]), int(parts[1])
-            delta = int(parts[2]) if len(parts) > 2 else 400
-            await lab.wheel(x, y, delta)
-            run.step(segment, action=f"scroll:{x},{y},{delta}", surface="vm")
-
-        elif verb == "focus":
-            await lab.focus_vm()
-            run.step(segment, action="focus", surface="vm")
-
-        elif verb == "type":
-            await lab.type(arg)
-            run.step(segment, action=f"type:{arg}", surface="vm")
-
-        elif verb == "cred":
-            value = await resolve_credential(lab, run, arg)
-            run.redactor.add(value, arg.replace("/", "-").lower())
-            await lab.type(value)
-            run.step(segment, action=f"cred:{arg}", surface="vm", note=f"{len(value)} chars")
-
-        elif verb == "signin":
-            n = await do_signin(lab, run, segment, arg.strip().lower())
-            findings += n
-
-        elif verb == "key":
-            keys = [k.strip() for k in arg.split("+")] if "+" not in arg else [arg]
-            await lab.key(*keys)
-            run.step(segment, action=f"key:{arg}", surface="vm")
-
-        elif verb == "wait":
-            await asyncio.sleep(int(arg) / 1000)
-            run.step(segment, action=f"wait:{arg}", surface="vm")
-
-        elif verb == "until":
-            name, _, rest = arg.partition(":")
-            budget_s = 300.0
-            probe_arg = rest
-            if rest and rest.rsplit(":", 1)[-1].isdigit() and ":" in rest:
-                probe_arg, budget_s = rest.rsplit(":", 1)[0], float(rest.rsplit(":", 1)[1])
-            elif rest.isdigit() and name == "connected":
-                probe_arg, budget_s = "", float(rest)
-            probe = PROBES.get(name)
-            if probe is None:
-                raise Stop(f"unknown probe {name!r}; known: {sorted(PROBES)}")
-            started = time.monotonic()
-            ok = await probe(lab, run, segment, probe_arg, budget_s)
-            elapsed = time.monotonic() - started
-            if ok:
-                run.step(
-                    segment,
-                    action=f"until:{arg}",
-                    surface="probe",
-                    note=f"settled after {elapsed:.0f}s",
-                )
-            else:
-                shot = await capture(lab, run, segment, f"{label}-timeout", watch, log)
-                findings += 1
-                run.step(
-                    segment,
-                    verdict="LAB007",
-                    severity="major",
-                    action=f"until:{arg}",
-                    surface="probe",
-                    images=[shot],
-                    note=f"did not complete within {budget_s:.0f}s",
-                )
-                print(f"  ! LAB007 {arg} did not complete within {budget_s:.0f}s")
-
-        elif verb == "dialog":
-            text = await lab.dismiss_dialog()
-            run.step(
-                segment,
-                action="dialog",
-                surface="dom",
-                observed={"kind": "dialog", "value": text},
-            )
-            if text:
-                print(f"  dialog: {text[:160]}")
-
-        elif verb == "page":
-            await lab.goto_page(int(arg))
-            run.step(segment, action=f"page:{arg}", surface="dom")
-
-        elif verb == "read":
-            # The learner's way through the instruction pane. `page:` is faster
-            # and exact, which is exactly why it is a bypass: it never touches
-            # the pane's own navigation, so a pane that will not scroll reads as
-            # a clean section.
-            scrolled = await lab.scroll_instructions(int(arg) if arg else 600)
-            if scrolled.stuck:
-                findings += 1
-                run.step(
-                    segment, verdict="LAB003", severity="major", domain="setup",
-                    action=f"read:{arg or 600}", surface="dom",
-                    note=scrolled.describe(),
-                )
-                print(f"  !! {scrolled.describe()}")
-            else:
-                # A section that fits its pane still counts as read the
-                # learner's way -- there was no scroll for the learner to be
-                # denied. Reporting it as a defect is how the first live run
-                # filed a major finding against a page that was simply short.
-                run.step(segment, action=f"read:{arg or 600}", surface="dom",
-                         note=scrolled.describe())
-
-        elif verb == "shot":
-            shot = await capture(lab, run, segment, arg or label, watch, log)
-            run.step(segment, action="shot", surface="vm", images=[shot])
-            print(f"  -> {shot.relative_to(run.dir)}")
-            if watch is not None and watch.intervals:
-                last = watch.intervals[-1]
-                if log is not None and log.verbose:
-                    print(f"     {last.describe()}")
-
-        else:
+        handler = ACTIONS.get(verb)
+        if handler is None:
             raise Stop(f"unknown action {raw!r}\n\n{HELP}")
+        findings += await handler(step, arg)
     return findings
 
 
@@ -564,7 +689,12 @@ async def main_async(args) -> int:
                 await lab.ensure_open()
             except LabClosed as exc:
                 print(f"\n!! {exc}", file=sys.stderr)
-                run = Run.open(args.run) if args.run else Run.latest(RUNS)
+                # Best effort: if there is no run to write to, the message
+                # above is still the useful part, so never fail in here.
+                try:
+                    run = Run.open_or_latest(RUNS, args.run)
+                except RunNotFound:
+                    run = None
                 if run is not None:
                     segment = args.segment
                     try:
@@ -578,10 +708,7 @@ async def main_async(args) -> int:
                     )
                 return 4
 
-            run = Run.open(args.run) if args.run else Run.latest(RUNS)
-            if run is None:
-                print("No run folder. Create one with scripts/lab_run.py --start", file=sys.stderr)
-                return 2
+            run = Run.open_or_latest(RUNS, args.run)
 
             try:
                 args.segment = run.resolve_segment(args.segment)
@@ -715,9 +842,10 @@ def record_only(args, lab_minutes: int | None = None) -> int:
     because that is precisely when an honest record of how far the run got
     matters most.
     """
-    run = Run.open(args.run) if args.run else Run.latest(RUNS)
-    if run is None:
-        print("No run folder. Create one with scripts/lab_run.py --start", file=sys.stderr)
+    try:
+        run = Run.open_or_latest(RUNS, args.run)
+    except RunNotFound as exc:
+        print(str(exc), file=sys.stderr)
         return 2
     try:
         segment = run.resolve_segment(args.segment)
@@ -800,6 +928,9 @@ def main() -> int:
 
     try:
         return asyncio.run(main_async(args))
+    except RunNotFound as exc:
+        print(f"\n{exc}", file=sys.stderr)
+        return 2
     except (BrowserError, Stop) as exc:
         print(f"\n{exc}", file=sys.stderr)
         return 1

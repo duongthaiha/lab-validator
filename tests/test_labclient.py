@@ -223,16 +223,31 @@ def test_a_pane_that_did_not_move_is_still_recorded():
     A section that simply fits must still record that it was read the learner's
     way -- otherwise the coverage table cannot tell "read and fine" from "never
     read", and principle 9 says the second must be as loud as a failure.
+
+    The clean path used to be the `else` of the finding branch. Now the finding
+    branch returns and the clean path is what follows it, so this reads both
+    shapes: whatever comes after the guard inside the same function.
     """
     tree = ast.parse(LAB_STEP.read_text(encoding="utf-8"))
     branches = _finding_branches(tree)
-    assert branches and branches[0].orelse, (
+    assert branches, "no branch files a scroll finding"
+    guard = branches[0]
+
+    rest = list(guard.orelse)
+    if not rest:
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if isinstance(body, list) and guard in body:
+                rest = body[body.index(guard) + 1:]
+                break
+
+    otherwise = "\n".join(ast.unparse(child) for child in rest)
+    assert otherwise, (
         "the non-finding path records nothing, so a short section looks unread"
     )
-    otherwise = "\n".join(ast.unparse(child) for child in branches[0].orelse)
     assert "run.step(" in otherwise and "scrolled.describe()" in otherwise, otherwise
     assert "verdict=" not in otherwise, (
-        "the else branch files a verdict too, so it is not a clean read"
+        "the clean path files a verdict too, so it is not a clean read"
     )
 
 

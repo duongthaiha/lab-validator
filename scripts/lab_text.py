@@ -15,10 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from lab_validator.corpus import Outline  # noqa: E402
-from lab_validator.runlog import Run  # noqa: E402
-
-OUTLINE = ROOT / "artifacts" / "instructions" / "outline.json"
-RUNS = ROOT / "runs"
+from lab_validator.paths import OUTLINE, RUNS  # noqa: E402
+from lab_validator.runlog import Run, RunNotFound  # noqa: E402
 
 
 def resolve(outline: Outline, run: Run, segment: str):
@@ -42,9 +40,10 @@ def main() -> int:
     ap.add_argument("--lines", type=int, default=0, help="how many lines (0 = all)")
     args = ap.parse_args()
 
-    run = Run.open(args.run) if args.run else Run.latest(RUNS)
-    if run is None:
-        raise SystemExit("no run found; start one with lab_run.py --start")
+    try:
+        run = Run.open_or_latest(RUNS, args.run)
+    except RunNotFound as exc:
+        raise SystemExit(str(exc)) from exc
     outline = Outline.load(OUTLINE)
     seg, head = resolve(outline, run, args.segment)
 

@@ -29,7 +29,9 @@ import threading
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+from . import paths
+
+ROOT = paths.REPO_ROOT
 SCRIPTS = ROOT / "scripts"
 
 #: The skill's directory name, which is fixed by the Agent Skills spec rather
@@ -141,27 +143,259 @@ async def _select_off_the_loop(fn, *args, **kwargs):
     return await done
 
 
-async def _walk(args) -> int:
-    from playwright.async_api import async_playwright
+class _WalkAbort(Exception):
+    """A phase decided the walk cannot continue, and already said why.
 
-    from . import scope
-    from .browser import attached_context
-    from .corpus import extract
-    from .discovery import resolve
-    from .labclient import LabClient
-    from .launch import (
-        SignInTimeout,
-        await_lab_client,
-        click_launch,
-        ensure_signed_in,
-        signed_out,
-    )
-    from .preflight import preflight
-    from .runlog import Run
+    `_walk` used to be one 223-line function whose phases were marked only by
+    numbered comments. Splitting it into named phases means each `return 2` /
+    `return 3` inside a phase would otherwise only return from the phase. This
+    carries the exit code out to `_walk`, which is the one place that owns it.
+    """
+
+    def __init__(self, code: int):
+        super().__init__(code)
+        self.code = code
+
+
+async def _phase_sign_in(page, budget_s) -> None:
+    """The sign-in gate. The human's job, permanently."""
+    from .launch import ensure_signed_in, signed_out
+
+    async def is_signed_in():
+        try:
+            return not signed_out(
+                page.url,
+                await page.get_by_role("link", name="Sign In")
+                .or_(page.get_by_role("button", name="Sign In"))
+                .count() > 0,
+            )
+        except Exception:  # noqa: BLE001 - mid-navigation, try again
+            return False
+
+    await ensure_signed_in(is_signed_in, budget_s=budget_s)
+
+
+async def _phase_identify(page, args):
+    """URL + name -> exactly one enrolment. Never guess."""
+    from .discovery import LINKS_JS, resolve
     from .targets import Target
+
+    found = resolve(await page.evaluate(LINKS_JS), args.url, args.name or "")
+    if not found.ok:
+        print(f"\ncould not identify the lab: {found.reason}", file=sys.stderr)
+        if found.candidates:
+            print("\nreachable enrolments:", file=sys.stderr)
+            for e in found.candidates:
+                print(f"  {e}", file=sys.stderr)
+            print(
+                "\nRe-run with --name matching one of these exactly, or pass its "
+                "/ClassEnrollment/<id> URL directly.",
+                file=sys.stderr,
+            )
+        raise _WalkAbort(2)
+
+    enrolment = found.enrolment
+    print(f"lab       : {enrolment.title}")
+    print(f"            enrolment {enrolment.enrolment} ({found.reason})")
+    target = Target.from_url(enrolment.url, enrolment.title, root=ROOT / "targets")
+    print(f"descriptor: {target.slug}"
+          + ("" if target.is_enriched else " (synthesised -- none on disk)"))
+    return enrolment, target
+
+
+async def _phase_launch(page, context, args, enrolment):
+    """Launch. Automated, with a human fallback that is not a failure."""
+    from .labclient import LabClient
+    from .launch import SignInTimeout, await_lab_client, click_launch
+
+    if enrolment.url not in page.url:
+        await page.goto(enrolment.url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(2500)
+    # Whatever lab tabs exist now predate this launch, so the tab that
+    # Launch opens can be told apart from one left over from an
+    # earlier lab. The guidance deliberately leaves those open.
+    known = [p.url for p in LabClient.candidates(context)]
+    if known:
+        print(f"note      : {len(known)} lab client tab(s) already open; ignoring them")
+    outcome = await click_launch(page, budget_s=args.launch_budget)
+    if outcome.needs_human:
+        print(f"\n  LAUNCH NEEDED — {outcome.reason}")
+        print("  Click Launch yourself in the browser window. I will wait.")
+    try:
+        lab = await await_lab_client(context, budget_s=args.client_budget, known=known)
+    except SignInTimeout as exc:
+        # Not a crash, and not the user's fault: the lab may simply
+        # still be provisioning. A traceback here reads as "the tool
+        # broke" and buries the one line that says what to do next.
+        print(f"\n  LAB CLIENT NEVER ANSWERED — {exc}", file=sys.stderr)
+        print("  Nothing was walked, so nothing is recorded as checked.", file=sys.stderr)
+        raise _WalkAbort(3) from exc
+    print(f"instance  : {lab.instance_id}")
+    return lab
+
+
+async def _phase_instructions(lab, target, args):
+    """Extract the corpus and open the run folder that will hold the evidence."""
+    from .corpus import extract
+    from .runlog import Run
+
+    outline = await extract(lab.instructions)
+    artifacts = ROOT / "artifacts" / "instructions"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    outline.save(artifacts / "outline.json")
+    (artifacts / "outline.md").write_text(outline.to_markdown(), encoding="utf-8")
+
+    run = Run.create(
+        ROOT / "runs",
+        target.name,
+        lab=target.lab,
+        instance=lab.instance_id,
+        corpus=artifacts / "outline.md",
+        agent=args.agent,
+        segments=outline.segments(),
+    )
+    # A second copy inside the run, because artifacts/ is shared and the
+    # next walk overwrites it. Without this, asking an old run what to do
+    # next would read a *different lab's* tasks and answer confidently.
+    # Run folders are evidence; evidence that depends on a mutable file
+    # somewhere else is not evidence.
+    outline.save(run.dir / "outline.json")
+    run.manifest["targetSlug"] = target.slug
+    run.manifest["targetEnriched"] = target.is_enriched
+    run.manifest["enrichmentGaps"] = target.enrichment_gaps()
+    run.manifest["entryUrl"] = args.url
+    run.manifest["labMinutesAtStart"] = await lab.minutes_remaining()
+    run.manifest["structuralAnomalies"] = [
+        {"code": a.code, "severity": a.severity, "message": a.message}
+        for a in outline.anomalies()
+    ]
+    run._save()
+    return run, outline
+
+
+async def _phase_vault(lab, run):
+    """Credentials: captured once, masked at the writer, kept as data."""
     from .vault import Vault
 
-    links_js = _load("browser_session.py").LINKS_JS
+    try:
+        vault = Vault.capture(await lab.credentials(), run.redactor)
+        vault.save(run.dir)
+        await lab.show_instructions()
+        print(f"vault     : {len(vault)} credential(s) captured (gitignored)")
+        return vault
+    except Exception as exc:  # noqa: BLE001 - a missing tab must not end the run
+        run.log(f"credential capture skipped: {type(exc).__name__}: {exc}")
+        print(f"vault     : none — {type(exc).__name__}; reuse falls back to the tab")
+        return None
+
+
+def _phase_preflight(run, vault) -> None:
+    """Segment 0: check the environment before walking it.
+
+    The most damaging defects in the reference run were setup defects
+    found late, after their failures had already been misattributed to
+    unrelated causes across several sections. Running this first does
+    not prevent them; it makes every later failure attributable.
+
+    It never stops the run. A blocked lab is the most valuable thing a
+    walk can find, and finding it early must not cost the rest.
+    """
+    from .preflight import preflight
+
+    checks = preflight(endpoints=vault.endpoints() if vault else None)
+    (run.dir / "preflight.md").write_text(
+        run.redactor.scrub(checks.to_markdown()), encoding="utf-8"
+    )
+    run.manifest["preflight"] = {
+        "checks": len(checks.checks),
+        "failures": [
+            {"name": c.name, "verdict": c.verdict, "domain": c.domain,
+             "severity": c.severity, "detail": c.detail}
+            for c in checks.failures
+        ],
+        "unchecked": checks.unchecked,
+    }
+    run._save()
+    if checks.failures:
+        print(f"preflight : {len(checks.failures)} SETUP DEFECT(S) before section 1")
+        for check in checks.failures:
+            print(f"            - {check.name}: {check.detail.splitlines()[0]}")
+        print("            the walk continues; later failures are now attributable")
+    else:
+        print(f"preflight : {len(checks.checks)} check(s), clean "
+              f"({len(checks.unchecked)} thing(s) it could not check)")
+
+
+def _phase_summary(run, outline, target) -> None:
+    print(f"run       : {run.dir}")
+    print(f"lab clock : {run.manifest['labMinutesAtStart']} min")
+    print(f"segments  : {len(outline.segments())}")
+    print(f"anomalies : {len(outline.anomalies())} structural")
+    if not target.is_enriched:
+        print("\n  No descriptor on disk, so this run makes OBSERVATION-based")
+        print("  findings only. It cannot check any of:")
+        for gap in target.enrichment_gaps():
+            print(f"    - {gap}")
+
+
+async def _phase_scope(run, outline, vault, args):
+    """Everything above is capture; everything below is hours of walking.
+
+    This is the moment to ask, and it costs the human nothing extra because
+    they are already at the keyboard -- they signed in by hand a few minutes
+    ago.
+
+    Nothing here can be inferred: only a person knows which sections they just
+    edited. So --sections decides if given, a terminal is asked if there is
+    one, and otherwise everything is walked, which is what this command did
+    before selection existed.
+    """
+    from . import scope
+
+    print()
+    try:
+        # Off the loop: `select` may block on `input()` for as long as a
+        # person takes to read the review and decide, and this coroutine
+        # owns the Playwright connection to the launched lab.
+        applied = await _select_off_the_loop(
+            scope.select, run, args.sections, outline=outline, vault=vault
+        )
+    except scope.ScopeError as exc:
+        print(f"--sections: {exc}", file=sys.stderr)
+        raise _WalkAbort(2) from exc
+    except Exception as exc:  # noqa: BLE001 - capture is done; do not lose it
+        # Everything expensive already happened. Failing here would throw
+        # away a launched lab, an extracted corpus and a captured vault
+        # over the step that decides how much of it to walk -- and the
+        # fallback is simply the behaviour this command had before
+        # selection existed, so it is safe to take.
+        run.log(f"scope gate failed: {type(exc).__name__}: {exc}")
+        print(f"scope     : {type(exc).__name__}: {exc}")
+        print("            ALL sections stay selected; narrow it with "
+              "`lab-validator scope --sections`")
+        applied = None
+    else:
+        print(f"review    : {run.dir / scope.REVIEW_FILENAME}")
+
+    hint = f"lab-validator next --run {run.dir}"
+    if applied is not None and applied.not_selected_now:
+        print(f"\nnext: {hint}   (scoped; the rest stay unknown)")
+    else:
+        print(f"\nnext: {hint}")
+    print("  keep running `next` until it says stop; it names the one "
+          "legal move and why")
+
+
+async def _walk(args) -> int:
+    """Entry URL in, run folder out, in seven phases.
+
+    Each phase is a named function above so it can be read -- and tested --
+    on its own. This body is only the order they happen in and the one place
+    that turns a refusal into an exit code.
+    """
+    from playwright.async_api import async_playwright
+
+    from .browser import attached_context
 
     async with async_playwright() as pw:
         browser, context = await attached_context(pw, args.port)
@@ -173,195 +407,17 @@ async def _walk(args) -> int:
             await page.goto(args.url, wait_until="domcontentloaded")
             await page.wait_for_timeout(2000)
 
-            # 1. The sign-in gate. The human's job, permanently.
-            async def is_signed_in():
-                try:
-                    has_login = await page.get_by_role(
-                        "link", name="Sign In"
-                    ).or_(page.get_by_role("button", name="Sign In")).count() > 0
-                    return not signed_out(page.url, has_login)
-                except Exception:  # noqa: BLE001 - mid-navigation, try again
-                    return False
-
-            await ensure_signed_in(is_signed_in, budget_s=args.signin_budget)
-
-            # 2. URL + name -> exactly one enrolment. Never guess.
-            links = await page.evaluate(links_js)
-            found = resolve(links, args.url, args.name or "")
-            if not found.ok:
-                print(f"\ncould not identify the lab: {found.reason}", file=sys.stderr)
-                if found.candidates:
-                    print("\nreachable enrolments:", file=sys.stderr)
-                    for e in found.candidates:
-                        print(f"  {e}", file=sys.stderr)
-                    print(
-                        "\nRe-run with --name matching one of these exactly, or pass its "
-                        "/ClassEnrollment/<id> URL directly.",
-                        file=sys.stderr,
-                    )
-                return 2
-            enrolment = found.enrolment
-            print(f"lab       : {enrolment.title}")
-            print(f"            enrolment {enrolment.enrolment} ({found.reason})")
-
-            target = Target.from_url(enrolment.url, enrolment.title, root=ROOT / "targets")
-            print(f"descriptor: {target.slug}"
-                  + ("" if target.is_enriched else " (synthesised -- none on disk)"))
-
-            # 3. Launch. Automated, with a human fallback that is not a failure.
-            if enrolment.url not in page.url:
-                await page.goto(enrolment.url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(2500)
-            # Whatever lab tabs exist now predate this launch, so the tab that
-            # Launch opens can be told apart from one left over from an
-            # earlier lab. The guidance deliberately leaves those open.
-            known = [p.url for p in LabClient.candidates(context)]
-            if known:
-                print(f"note      : {len(known)} lab client tab(s) already open; ignoring them")
-            outcome = await click_launch(page, budget_s=args.launch_budget)
-            if outcome.needs_human:
-                print(f"\n  LAUNCH NEEDED — {outcome.reason}")
-                print("  Click Launch yourself in the browser window. I will wait.")
-            try:
-                lab = await await_lab_client(context, budget_s=args.client_budget, known=known)
-            except SignInTimeout as exc:
-                # Not a crash, and not the user's fault: the lab may simply
-                # still be provisioning. A traceback here reads as "the tool
-                # broke" and buries the one line that says what to do next.
-                print(f"\n  LAB CLIENT NEVER ANSWERED — {exc}", file=sys.stderr)
-                print("  Nothing was walked, so nothing is recorded as checked.",
-                      file=sys.stderr)
-                return 3
-            print(f"instance  : {lab.instance_id}")
-
-            # 4. Instructions.
-            outline = await extract(lab.instructions)
-            artifacts = ROOT / "artifacts" / "instructions"
-            artifacts.mkdir(parents=True, exist_ok=True)
-            outline.save(artifacts / "outline.json")
-            (artifacts / "outline.md").write_text(outline.to_markdown(), encoding="utf-8")
-
-            run = Run.create(
-                ROOT / "runs",
-                target.name,
-                lab=target.lab,
-                instance=lab.instance_id,
-                corpus=artifacts / "outline.md",
-                agent=args.agent,
-                segments=outline.segments(),
-            )
-            # A second copy inside the run, because artifacts/ is shared and the
-            # next walk overwrites it. Without this, asking an old run what to do
-            # next would read a *different lab's* tasks and answer confidently.
-            # Run folders are evidence; evidence that depends on a mutable file
-            # somewhere else is not evidence.
-            outline.save(run.dir / "outline.json")
-            run.manifest["targetSlug"] = target.slug
-            run.manifest["targetEnriched"] = target.is_enriched
-            run.manifest["enrichmentGaps"] = target.enrichment_gaps()
-            run.manifest["entryUrl"] = args.url
-            run.manifest["labMinutesAtStart"] = await lab.minutes_remaining()
-            run.manifest["structuralAnomalies"] = [
-                {"code": a.code, "severity": a.severity, "message": a.message}
-                for a in outline.anomalies()
-            ]
-            run._save()
-
-            # 5. Credentials: captured once, masked at the writer, kept as data.
-            vault = None
-            try:
-                vault = Vault.capture(await lab.credentials(), run.redactor)
-                vault.save(run.dir)
-                await lab.show_instructions()
-                print(f"vault     : {len(vault)} credential(s) captured (gitignored)")
-            except Exception as exc:  # noqa: BLE001 - a missing tab must not end the run
-                run.log(f"credential capture skipped: {type(exc).__name__}: {exc}")
-                print(f"vault     : none — {type(exc).__name__}; reuse falls back to the tab")
-
-            # 6. Segment 0: check the environment before walking it.
-            #
-            # The most damaging defects in the reference run were setup defects
-            # found late, after their failures had already been misattributed to
-            # unrelated causes across several sections. Running this first does
-            # not prevent them; it makes every later failure attributable.
-            #
-            # It never stops the run. A blocked lab is the most valuable thing a
-            # walk can find, and finding it early must not cost the rest.
-            checks = preflight(endpoints=vault.endpoints() if vault else None)
-            (run.dir / "preflight.md").write_text(
-                run.redactor.scrub(checks.to_markdown()), encoding="utf-8"
-            )
-            run.manifest["preflight"] = {
-                "checks": len(checks.checks),
-                "failures": [
-                    {"name": c.name, "verdict": c.verdict, "domain": c.domain,
-                     "severity": c.severity, "detail": c.detail}
-                    for c in checks.failures
-                ],
-                "unchecked": checks.unchecked,
-            }
-            run._save()
-            if checks.failures:
-                print(f"preflight : {len(checks.failures)} SETUP DEFECT(S) before section 1")
-                for check in checks.failures:
-                    print(f"            - {check.name}: {check.detail.splitlines()[0]}")
-                print("            the walk continues; later failures are now attributable")
-            else:
-                print(f"preflight : {len(checks.checks)} check(s), clean "
-                      f"({len(checks.unchecked)} thing(s) it could not check)")
-
-            print(f"run       : {run.dir}")
-            print(f"lab clock : {run.manifest['labMinutesAtStart']} min")
-            print(f"segments  : {len(outline.segments())}")
-            print(f"anomalies : {len(outline.anomalies())} structural")
-            if not target.is_enriched:
-                print("\n  No descriptor on disk, so this run makes OBSERVATION-based")
-                print("  findings only. It cannot check any of:")
-                for gap in target.enrichment_gaps():
-                    print(f"    - {gap}")
-
-            # 7. Scope. Everything above is capture; everything below is hours of
-            # walking. This is the moment to ask, and it costs the human nothing
-            # extra because they are already at the keyboard -- they signed in by
-            # hand a few minutes ago.
-            #
-            # Nothing here can be inferred: only a person knows which sections
-            # they just edited. So --sections decides if given, a terminal is
-            # asked if there is one, and otherwise everything is walked, which is
-            # what this command did before selection existed.
-            print()
-            try:
-                # Off the loop: `select` may block on `input()` for as long as a
-                # person takes to read the review and decide, and this coroutine
-                # owns the Playwright connection to the launched lab.
-                applied = await _select_off_the_loop(
-                    scope.select, run, args.sections, outline=outline, vault=vault
-                )
-            except scope.ScopeError as exc:
-                print(f"--sections: {exc}", file=sys.stderr)
-                return 2
-            except Exception as exc:  # noqa: BLE001 - capture is done; do not lose it
-                # Everything expensive already happened. Failing here would throw
-                # away a launched lab, an extracted corpus and a captured vault
-                # over the step that decides how much of it to walk -- and the
-                # fallback is simply the behaviour this command had before
-                # selection existed, so it is safe to take.
-                run.log(f"scope gate failed: {type(exc).__name__}: {exc}")
-                print(f"scope     : {type(exc).__name__}: {exc}")
-                print("            ALL sections stay selected; narrow it with "
-                      "`lab-validator scope --sections`")
-                applied = None
-            else:
-                print(f"review    : {run.dir / scope.REVIEW_FILENAME}")
-
-            hint = f"lab-validator next --run {run.dir}"
-            if applied is not None and applied.not_selected_now:
-                print(f"\nnext: {hint}   (scoped; the rest stay unknown)")
-            else:
-                print(f"\nnext: {hint}")
-            print("  keep running `next` until it says stop; it names the one "
-                  "legal move and why")
+            await _phase_sign_in(page, args.signin_budget)
+            enrolment, target = await _phase_identify(page, args)
+            lab = await _phase_launch(page, context, args, enrolment)
+            run, outline = await _phase_instructions(lab, target, args)
+            vault = await _phase_vault(lab, run)
+            _phase_preflight(run, vault)
+            _phase_summary(run, outline, target)
+            await _phase_scope(run, outline, vault, args)
             return 0
+        except _WalkAbort as abort:
+            return abort.code
         finally:
             await browser.close()
 
@@ -607,39 +663,29 @@ def _outline_for(run) -> tuple[object | None, str]:
     return Outline.load(sibling), ""
 
 
+def _add_run_args(parser) -> None:
+    """Declare the `--run` / `--runs` pair that every run-reading command takes.
+
+    Three subparsers declared it identically. Kept beside `_open_run`, which is
+    what consumes it, so the flags and their resolution stay in step.
+    """
+    parser.add_argument("--run", help="run folder (default: the most recent)")
+    parser.add_argument("--runs", help="runs root (default: ./runs)")
+
+
 def _open_run(args):
     """Open the run named by `--run`, or the latest under `--runs`.
 
-    Returns `(run, exit_code)`; exactly one of them is None.
-
-    `--run` and `--runs` sit next to each other on two commands and mean
-    opposite things -- one folder versus the folder of folders -- so pointing
-    `--run` at a runs root is the mistake people actually make. It used to exit
-    with a `FileNotFoundError` traceback, which reads as a crash rather than as
-    a typo. Detect that specific case and name the runs inside it, which is the
-    same move `LabClient.find` and `scope.parse` already make: refuse, and say
-    what the real candidates were.
+    Returns `(run, exit_code)`; exactly one of them is None. The resolution
+    rules and the runs-root-typo advice live in `Run.open_or_latest`.
     """
-    from .runlog import Run
+    from .runlog import Run, RunNotFound
 
     runs_root = Path(args.runs or "runs")
-    if not args.run:
-        run = Run.latest(runs_root)
-        if run is None:
-            print(f"no run found under {runs_root}", file=sys.stderr)
-            return None, 2
-        return run, None
-
-    path = Path(args.run)
     try:
-        return Run.open(path), None
-    except FileNotFoundError as exc:
+        return Run.open_or_latest(runs_root, args.run), None
+    except RunNotFound as exc:
         print(f"{exc}", file=sys.stderr)
-        inside = sorted(p.name for p in path.glob("*") if (p / "run.json").is_file())
-        if inside:
-            print(f"that looks like a runs root. It holds: {', '.join(inside)}",
-                  file=sys.stderr)
-            print(f"did you mean --run {path / inside[-1]}?", file=sys.stderr)
         return None, 2
 
 
@@ -780,6 +826,90 @@ def _console_utf8() -> None:
             reconfigure(encoding="utf-8", errors="replace")
 
 
+def _parser_walk() -> argparse.ArgumentParser:
+    from .browser import DEFAULT_CDP_PORT
+    from .scope import SECTIONS_HELP
+
+    w = argparse.ArgumentParser(prog="lab-validator walk")
+    w.add_argument("--url", required=True, help="the lab or catalogue URL")
+    w.add_argument("--name", help="the lab's title, to disambiguate the URL")
+    w.add_argument("--agent", default="lab-validator", help="who is walking")
+    w.add_argument("--signin-budget", type=float, default=900.0,
+                   help="seconds to wait for a human to sign in")
+    w.add_argument("--launch-budget", type=float, default=180.0,
+                   help="seconds to wait for Launch to become clickable")
+    w.add_argument("--client-budget", type=float, default=300.0,
+                   help="seconds to wait for the lab client to answer")
+    w.add_argument("--sections", help=SECTIONS_HELP)
+    w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
+    return w
+
+
+def _parser_scope() -> argparse.ArgumentParser:
+    from .scope import SECTIONS_HELP
+
+    s = argparse.ArgumentParser(prog="lab-validator scope")
+    _add_run_args(s)
+    s.add_argument("--sections",
+                   help=f"{SECTIONS_HELP}. Omit to review without changing anything.")
+    return s
+
+
+def _parser_next() -> argparse.ArgumentParser:
+    n = argparse.ArgumentParser(prog="lab-validator next")
+    _add_run_args(n)
+    n.add_argument("--minutes", type=int,
+                   help="lab minutes remaining, so the loop can reserve write-up time")
+    return n
+
+
+def _parser_debug() -> argparse.ArgumentParser:
+    d = argparse.ArgumentParser(prog="lab-validator debug")
+    _add_run_args(d)
+    d.add_argument("--tail", type=int, default=0,
+                   help="show only the last N captures (a long run answers "
+                        "'what was it doing when it stopped' badly in full)")
+    d.add_argument("--stuck", action="store_true",
+                   help="show only the actions that changed nothing on screen")
+    d.add_argument("--out", help="also write the report to this file")
+    return d
+
+
+def _parser_install_skill() -> argparse.ArgumentParser:
+    s = argparse.ArgumentParser(prog="lab-validator install-skill")
+    s.add_argument("--into", help="skills directory (default: ~/.copilot/skills)")
+    s.add_argument("--dry-run", action="store_true", help="list what would be written")
+    return s
+
+
+def _parser_package_skill() -> argparse.ArgumentParser:
+    s = argparse.ArgumentParser(prog="lab-validator package-skill")
+    s.add_argument("--out", help="output .skill file (default: dist/lab-validator.skill)")
+    return s
+
+
+#: built-in name -> (parser builder, handler). `main` was a chain of six
+#: `if args.command == "..."` blocks, each one inlining a parser; the shape was
+#: identical every time and the only way to ask "what flags does `debug` take?"
+#: was to read the source of `main`. As data, the parser can simply be built and
+#: asked -- which is what the documentation-drift tests now do instead of
+#: scraping `add_argument` calls out of this file with a regex.
+BUILTIN_PARSERS = {
+    "walk": (_parser_walk, cmd_walk),
+    "scope": (_parser_scope, cmd_scope),
+    "next": (_parser_next, cmd_next),
+    "debug": (_parser_debug, cmd_debug),
+    "install-skill": (_parser_install_skill, cmd_install_skill),
+    "package-skill": (_parser_package_skill, cmd_package_skill),
+}
+
+assert set(BUILTIN_PARSERS) == set(BUILTINS), (
+    "BUILTINS is the help text and BUILTIN_PARSERS is the dispatch; a name in "
+    "one and not the other is either an undocumented command or a documented "
+    "one that does not run"
+)
+
+
 def main() -> int:
     _console_utf8()
     parser = argparse.ArgumentParser(
@@ -801,67 +931,10 @@ def main() -> int:
         parser.print_help()
         return 0
 
-    if args.command == "walk":
-        from .browser import DEFAULT_CDP_PORT
-        from .scope import SECTIONS_HELP
-
-        w = argparse.ArgumentParser(prog="lab-validator walk")
-        w.add_argument("--url", required=True, help="the lab or catalogue URL")
-        w.add_argument("--name", help="the lab's title, to disambiguate the URL")
-        w.add_argument("--agent", default="lab-validator", help="who is walking")
-        w.add_argument("--signin-budget", type=float, default=900.0,
-                       help="seconds to wait for a human to sign in")
-        w.add_argument("--launch-budget", type=float, default=180.0,
-                       help="seconds to wait for Launch to become clickable")
-        w.add_argument("--client-budget", type=float, default=300.0,
-                       help="seconds to wait for the lab client to answer")
-        w.add_argument("--sections", help=SECTIONS_HELP)
-        w.add_argument("--port", type=int, default=DEFAULT_CDP_PORT)
-        return cmd_walk(w.parse_args(args.rest))
-
-    if args.command == "scope":
-        from .scope import SECTIONS_HELP
-
-        s = argparse.ArgumentParser(prog="lab-validator scope")
-        s.add_argument("--run", help="run folder (default: the most recent)")
-        s.add_argument("--runs", help="runs root (default: ./runs)")
-        s.add_argument("--sections",
-                       help=f"{SECTIONS_HELP}. Omit to review without changing anything.")
-        return cmd_scope(s.parse_args(args.rest))
-
-    if args.command == "next":
-        n = argparse.ArgumentParser(prog="lab-validator next")
-        n.add_argument("--run", help="run folder (default: the most recent)")
-        n.add_argument("--runs", help="runs root (default: ./runs)")
-        n.add_argument("--minutes", type=int,
-                       help="lab minutes remaining, so the loop can reserve write-up time")
-        return cmd_next(n.parse_args(args.rest))
-
-    if args.command == "debug":
-        d = argparse.ArgumentParser(prog="lab-validator debug")
-        d.add_argument("--run", help="run folder (default: the most recent)")
-        d.add_argument("--runs", help="runs root (default: ./runs)")
-        d.add_argument("--tail", type=int, default=0,
-                       help="show only the last N captures (a long run answers "
-                            "'what was it doing when it stopped' badly in full)")
-        d.add_argument("--stuck", action="store_true",
-                       help="show only the actions that changed nothing on screen")
-        d.add_argument("--out", help="also write the report to this file")
-        return cmd_debug(d.parse_args(args.rest))
-
-    if args.command == "install-skill":
-        s = argparse.ArgumentParser(prog="lab-validator install-skill")
-        s.add_argument("--into", help="skills directory (default: ~/.copilot/skills)")
-        s.add_argument("--dry-run", action="store_true", help="list what would be written")
-        return cmd_install_skill(s.parse_args(args.rest))
-
-    if args.command == "package-skill":
-        s = argparse.ArgumentParser(prog="lab-validator package-skill")
-        s.add_argument(
-            "--out",
-            help="output .skill file (default: dist/lab-validator.skill)",
-        )
-        return cmd_package_skill(s.parse_args(args.rest))
+    builtin = BUILTIN_PARSERS.get(args.command)
+    if builtin is not None:
+        build, handler = builtin
+        return handler(build().parse_args(args.rest))
 
     if args.command in COMMANDS:
         return _delegate(COMMANDS[args.command][0], args.rest)
