@@ -170,6 +170,35 @@ Structural rules the renderer holds to:
 - Commit messages are imperative and describe the *behavioural* change, not the
   files touched: "Refuse the sign-in verdict the pixels cannot settle".
 
+### The Orientation block
+
+Every module under `src/lab_validator/` and `scripts/` ends its docstring with:
+
+```
+Orientation
+-----------
+Role:     renders the trace into gap-analysis.md; the last stage of a walk.
+Entry:    `render_section`, `render_run`, `Finding`
+Talks to: taxonomy, runlog, scope, learnerpath
+```
+
+It exists because the prose above it answers *why this module exists* and
+deliberately never answers *what do I call, and what does it talk to* — which
+is what someone reading the file for the first time needs first.
+
+Two rules, both enforced by `tests/test_docstrings.py`:
+
+- **It is strictly additive, and it goes last.** Never reword, reorder or
+  summarise the prose above it to make room. The first screen of `console.py`
+  is the story of the bug that module exists to catch; a metadata table above
+  that pushes the most valuable paragraph in the repo below the fold.
+- **It may not lie.** Every name under `Entry:` must resolve to a real
+  module-level definition and every name under `Talks to:` to a real import, so
+  a rename cannot leave the docstring reading plausibly and pointing nowhere.
+
+`Entry:` names the two-to-four things a caller actually uses. It is not an API
+dump — `cli.py` names `main` and its dispatch tables, not thirty parsers.
+
 ## Safety
 
 Lab runs handle real credentials. `pre-commit` blocks `.env`, `.auth/`, HAR

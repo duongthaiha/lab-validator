@@ -13,25 +13,6 @@ looked at the screen; every other verb reported success on the strength of
 having been dispatched. So the model clicked, was told PASS, and had no way on
 earth to learn that nothing had happened.
 
-## The mistake this module nearly made
-
-The first draft of this file measured that run, found 24 byte-identical
-captures, and concluded **the console had frozen**. It was written up
-confidently, with a stop, a message telling the user to reconnect the lab, and a
-docstring about the perils of mistaking presence for liveness.
-
-Then somebody looked at the last frame. A Windows desktop, wallpaper, taskbar,
-**clock reading 5:39 PM**. The console was in perfect health. Every number was
-correct and the story built on them was wrong: clicking empty wallpaper *should*
-change nothing, and the tiny 0.002-0.005 deltas punctuating the stillness were
-the clock ticking. The pathology was not a dead console. It was a walk driving a
-browser that had never been launched.
-
-That is the failure this project exists to catch, committed by the diagnostic
-built to catch it: a real observation, correctly measured, **attributed to the
-wrong cause** and published as fact. It survives here as the reason this module
-reports and refuses to conclude.
-
 ## So this module measures, and does not judge
 
 The delta goes to the model as an observation in plain words, and to
