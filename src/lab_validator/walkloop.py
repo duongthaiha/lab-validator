@@ -22,6 +22,12 @@ The unit of progress is the **numbered task**, not the section. A section is a
 heading; a task is a thing the instructions told a learner to do. The failure
 mode of the reference walk was a task quietly skipped inside a section that then
 reported clean, and only task-level bookkeeping can see that.
+
+Orientation
+-----------
+Role:     decides the next act from the run folder alone, and refuses when it cannot.
+Entry:    `next_move`, `Move`, `describe`, `ACTIONS`
+Talks to: asks, corpus, report, runlog
 """
 
 from __future__ import annotations

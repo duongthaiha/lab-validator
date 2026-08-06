@@ -12,6 +12,12 @@ The trace is the product; this renders it. Three rules shape the output:
   expiring instances and dropped sessions. Per-section reports mean the walk is
   worth something the moment each section lands, and they are what the lab
   author actually acts on — nobody edits a lab by reading a 30-finding digest.
+
+Orientation
+-----------
+Role:     renders the trace into per-section reports and the roll-up; the last stage of a walk.
+Entry:    `render`, `render_segment`, `write_segment`, `completability`
+Talks to: corpus, learnerpath, runlog, taxonomy
 """
 
 from __future__ import annotations

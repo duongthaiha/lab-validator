@@ -20,6 +20,12 @@ Redaction happens *here*, at the writer, rather than at each call site. A
 :class:`Redactor` registered on the run scrubs known secret values out of every
 string before it reaches ``trace.jsonl`` or ``run.log`` -- lab credentials are
 short-lived but they should still never be written down.
+
+Orientation
+-----------
+Role:     the run folder and its append-only trace; the source of truth every stage reads.
+Entry:    `Run`, `Segment`, `Redactor`, `RunNotFound`
+Talks to: taxonomy
 """
 
 from __future__ import annotations

@@ -12,6 +12,12 @@ What remains is one setting, still overridable from the environment or a `.env`
 file the same way, and the two paths for the encrypted Learning Campus session.
 `get_settings` keeps its name and its `.learning_campus_url` attribute so the
 three call sites did not have to change.
+
+Orientation
+-----------
+Role:     the one setting the tool reads, plus the paths of the encrypted session.
+Entry:    `get_settings`, `Settings`, `LEARNING_CAMPUS_STATE`
+Talks to: paths
 """
 
 from __future__ import annotations

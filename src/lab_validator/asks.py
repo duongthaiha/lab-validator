@@ -24,6 +24,12 @@ impossible, because the cost is asymmetric: a missed ask stops the walk and a
 human notices, while an invented one types a credential into whatever happens to
 be focused. Prose about a credential is not a request for one, so this matches
 only sentences that also carry an instruction cue.
+
+Orientation
+-----------
+Role:     decides which instruction sentence is asking for a lab-issued credential.
+Entry:    `asks_in`, `Ask`, `TERMS`
+Talks to: nothing
 """
 
 from __future__ import annotations

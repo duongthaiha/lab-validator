@@ -9,6 +9,12 @@ textually the same. One home instead.
 ``scripts/*.py`` still compute their own ``ROOT`` before importing anything --
 they need it to put ``src/`` on ``sys.path`` in the first place -- but they take
 the artifact paths from here.
+
+Orientation
+-----------
+Role:     one home for the repo, run and artifact paths every other module needs.
+Entry:    `REPO_ROOT`, `RUNS`, `TARGETS`, `OUTLINE`
+Talks to: nothing
 """
 
 from __future__ import annotations

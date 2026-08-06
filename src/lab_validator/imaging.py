@@ -12,6 +12,12 @@ wait, so they downscale hard.
 A separate `view/` copy is written for frames the agent needs to inspect, sized
 to fit the reader's limit. Evidence and inspection have different constraints
 and conflating them means one of them loses.
+
+Orientation
+-----------
+Role:     stores evidence frames, and the smaller copies an agent can read back.
+Entry:    `save_evidence`, `save_view`, `stability`
+Talks to: nothing
 """
 
 from __future__ import annotations

@@ -10,6 +10,12 @@ It reads the catalogue with the session that is already in the attached
 browser. It never signs in and never handles a password: TMS auth is a
 memory-only cookie behind an interactive challenge, so a human does that once
 and the agent attaches afterwards.
+
+Orientation
+-----------
+Role:     operator-facing shim over `discovery`: list enrolments, scaffold a target.
+Entry:    `main`, `cmd_list`, `cmd_scaffold`
+Talks to: browser, discovery, targets
 """
 
 from __future__ import annotations
@@ -20,6 +26,13 @@ import re
 import sys
 from pathlib import Path
 from urllib.parse import urljoin
+
+#: `--help` is read by operators; the Orientation block is written for
+#: developers reading the file. argparse also reflows whatever it is handed, so
+#: leaving the block in turned a formatted table into a paragraph of mush. Cut
+#: it off -- `test_operator_help_never_shows_the_developer_block` fails if this
+#: stops working.
+HELP_DOC = __doc__.split("\nOrientation\n")[0].strip()
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -238,7 +251,7 @@ def main() -> int:
     p = argparse.ArgumentParser(
         description="Discover launchable labs and scaffold a target descriptor.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
+        epilog=HELP_DOC,
     )
     p.add_argument("--list", action="store_true", help="list enrolments (default)")
     p.add_argument(

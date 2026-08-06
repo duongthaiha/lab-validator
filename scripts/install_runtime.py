@@ -4,6 +4,12 @@
 Works identically from a clone and from an extracted `.skill` archive, because
 in both cases the skill root is the project root -- that is the point of the
 repository *being* the skill.
+
+Orientation
+-----------
+Role:     operator-facing shim: installs the CLI from an extracted skill archive.
+Entry:    `main`
+Talks to: nothing
 """
 
 from __future__ import annotations

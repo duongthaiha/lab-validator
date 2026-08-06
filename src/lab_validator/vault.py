@@ -32,6 +32,12 @@ The residual risk is unchanged and worth restating: **screenshots are pixels and
 the redactor is text-only.** A key visible on screen is captured as an image no
 text filter can reach. That is why ``runs/`` is gitignored and why :meth:`save`
 refuses to write anywhere else.
+
+Orientation
+-----------
+Role:     captures lab-issued credentials once at launch and serves them for the whole run.
+Entry:    `Vault`, `VaultError`, `classify`, `role_of`
+Talks to: asks, labclient, runlog
 """
 
 from __future__ import annotations

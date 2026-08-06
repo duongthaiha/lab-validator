@@ -29,6 +29,12 @@ Two standing constraints are enforced here as code rather than as lore:
   countdown and is sometimes ``display:none``. Reaching past that with a
   scripted click bypasses the exact gate the product uses to say "not ready",
   and buys a lab client in an undefined state. Wait instead, and say so.
+
+Orientation
+-----------
+Role:     gets from a lab URL to a running lab client, with one human sign-in.
+Entry:    `ensure_signed_in`, `click_launch`, `await_lab_client`, `LaunchOutcome`
+Talks to: browser, labclient
 """
 
 from __future__ import annotations

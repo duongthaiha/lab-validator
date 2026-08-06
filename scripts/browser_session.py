@@ -9,6 +9,12 @@
 No password is ever stored. You sign in by hand in the debug browser once; the
 dedicated profile keeps you signed in, and Skillable's device registration sees
 a stable browser fingerprint on every subsequent run.
+
+Orientation
+-----------
+Role:     operator-facing shim over `browser`: attach to a signed-in browser and recon it.
+Entry:    `main`, `cmd_links`, `cmd_probe`, `DUMP_JS`
+Talks to: browser, config, discovery
 """
 
 from __future__ import annotations

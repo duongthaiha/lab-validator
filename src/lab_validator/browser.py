@@ -15,6 +15,12 @@ Two ways to get an authenticated browser, in order of preference:
 Neither stores a password. This is the preferred alternative to
 ``scripts/bootstrap_auth.py``; that script remains useful for headless CI where
 no interactive profile exists.
+
+Orientation
+-----------
+Role:     launches or attaches to a real Chromium over CDP; every page comes from here.
+Entry:    `attach`, `attached_context`, `launch_debug_browser`, `script_main`
+Talks to: config
 """
 
 from __future__ import annotations

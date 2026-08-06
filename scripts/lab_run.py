@@ -7,6 +7,12 @@
     python scripts/lab_run.py --finish complete
     python scripts/lab_run.py --targets               # list target descriptors
     python scripts/lab_run.py --check-target SLUG     # validate one strictly
+
+Orientation
+-----------
+Role:     operator-facing shim over `runlog` and `report`: start, inspect and report a run.
+Entry:    `main`, `cmd_start`, `cmd_report`, `cmd_finish`
+Talks to: browser, corpus, labclient, paths, report, runlog, targets, vault
 """
 
 from __future__ import annotations

@@ -18,6 +18,12 @@ walk and the report counts and names *separately*.
 mid-walk*. That is a different fact, with a different cause and a different
 reader reaction, and collapsing the two would lose the only useful difference
 between them. Two facts, two words.
+
+Orientation
+-----------
+Role:     review the lab, choose which sections to walk, and record what was left out.
+Entry:    `review`, `parse`, `apply`, `Selection`
+Talks to: corpus, runlog, vault, walkloop
 """
 
 from __future__ import annotations

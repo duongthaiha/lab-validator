@@ -39,6 +39,12 @@ Which is why nothing here is compared against a constant. A run measures its own
 idle noise from the intervals where **nothing was sent**, and describes an
 action relative to that. One console at one resolution is not a population, and
 a number tuned to it would be exactly that.
+
+Orientation
+-----------
+Role:     measures what each action did to the screen, and reports without judging.
+Entry:    `ConsoleWatch`, `DebugLog`, `replay`
+Talks to: imaging, runlog
 """
 
 from __future__ import annotations

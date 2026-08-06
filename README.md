@@ -775,6 +775,23 @@ runs/<timestamp>/                   gitignored — screenshots contain live API 
   gap-analysis.md                   roll-up, links to every section report
 ```
 
+Each of those modules and scripts ends its docstring with an `Orientation`
+block — what to call, what it talks to, and where it sits in a walk:
+
+```
+Orientation
+-----------
+Role:     renders the trace into per-section reports and the roll-up.
+Entry:    `render`, `render_segment`, `write_segment`, `completability`
+Talks to: corpus, learnerpath, runlog, taxonomy
+```
+
+The prose above the block explains *why* the module exists, and often names the
+bug that motivated it; the block is the orientation that prose deliberately
+leaves out. `tests/test_docstrings.py` checks every `Entry:` name against the
+module's real definitions and every `Talks to:` name against its real imports,
+so the block cannot go stale without a test failing.
+
 ## Design
 
 See the research report for the full architecture. In brief — *oracle-first,

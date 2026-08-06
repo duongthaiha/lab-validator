@@ -3,6 +3,12 @@
 The walker needs the exact wording a learner would read. Reading it from the saved
 outline rather than the live frame keeps the text stable for the whole run and ties
 every finding to the corpus the manifest hashed.
+
+Orientation
+-----------
+Role:     operator-facing shim over `corpus`: print a section's instructions as saved.
+Entry:    `main`, `resolve`
+Talks to: corpus, paths, runlog
 """
 
 from __future__ import annotations
@@ -10,6 +16,13 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+#: `--help` is read by operators; the Orientation block is written for
+#: developers reading the file. argparse also reflows whatever it is handed, so
+#: leaving the block in turned a formatted table into a paragraph of mush. Cut
+#: it off -- `test_operator_help_never_shows_the_developer_block` fails if this
+#: stops working.
+HELP_DOC = __doc__.split("\nOrientation\n")[0].strip()
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -32,7 +45,7 @@ def resolve(outline: Outline, run: Run, segment: str):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(description=HELP_DOC)
     ap.add_argument("--segment", required=True, help="segment id or unique prefix")
     ap.add_argument("--run", type=Path, help="run folder (default: most recent)")
     ap.add_argument("--tasks", action="store_true", help="list task headings only")

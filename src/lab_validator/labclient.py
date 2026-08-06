@@ -8,6 +8,12 @@ Screen capture uses ``api.v1.getEnvironmentScreenDataUrl()`` in preference to a
 Playwright screenshot: it returns just the VM framebuffer, with no browser
 chrome and no instructions pane, which makes the resulting images far easier to
 reason about and much cheaper to look at.
+
+Orientation
+-----------
+Role:     drives the running lab client: instruction pane, VM console, screen capture.
+Entry:    `LabClient`, `Credential`, `LabClosed`, `instance_id_of`
+Talks to: browser
 """
 
 from __future__ import annotations

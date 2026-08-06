@@ -28,6 +28,12 @@ report prints it -- an absent finding must never read as a pass.
 Everything here is pure: it takes already-captured strings and returns findings.
 The live probes (does this deployment serve what it claims? does this resource
 exist?) sit above it, so the judgement is testable without a lab.
+
+Orientation
+-----------
+Role:     checks the environment first, so a setup fault is not read as an instruction fault.
+Entry:    `preflight`, `Preflight`, `Check`, `parse_config`
+Talks to: nothing
 """
 
 from __future__ import annotations

@@ -13,6 +13,12 @@ console had frozen, and was wrong -- the console was fine, and the walk was
 typing URLs at a desktop with no browser open. The numbers were right and the
 story was invented. So this prints the numbers, the actions beside them, and the
 frames to go and look at.
+
+Orientation
+-----------
+Role:     reads a finished run back and explains what it actually did.
+Entry:    `report`
+Talks to: console
 """
 
 from __future__ import annotations

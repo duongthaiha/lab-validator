@@ -4,6 +4,12 @@
     python scripts/lab_corpus.py --segments         # show derived segments
     python scripts/lab_corpus.py --anomalies        # structural problems
     python scripts/lab_corpus.py --section s07      # print one section
+
+Orientation
+-----------
+Role:     operator-facing shim over `corpus`: extract and inspect the instruction outline.
+Entry:    `main`, `do_extract`, `load`
+Talks to: browser, corpus, labclient, paths
 """
 
 from __future__ import annotations

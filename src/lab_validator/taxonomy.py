@@ -30,6 +30,12 @@ an instruction defect if the text names a SKU that never existed. Guessing is
 worse than not knowing: a defect attributed to the wrong owner is correctly
 rejected by that owner, and then it dies. Ruling out quota, region and
 transience took a deliberate experiment for ``G-08``; that is the standard.
+
+Orientation
+-----------
+Role:     the verdict codes and the instruction/setup axis every finding is filed under.
+Entry:    `VERDICTS`, `BY_CODE`, `default_severity`, `undocumented_codes`
+Talks to: nothing
 """
 
 from __future__ import annotations

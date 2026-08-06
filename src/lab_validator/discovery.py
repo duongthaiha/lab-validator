@@ -15,6 +15,12 @@ carry expectations, so a plausible-looking guess is worse than a blank, because
 it will be believed. Anything discovery cannot observe is emitted as a commented
 ``TODO`` naming how to find it, and :mod:`lab_validator.targets` will report the
 resulting gaps rather than let a run walk with an invented expectation.
+
+Orientation
+-----------
+Role:     turns a signed-in session into enrolments and a scaffolded target descriptor.
+Entry:    `parse_enrolments`, `resolve`, `scaffold`, `LINKS_JS`
+Talks to: targets
 """
 
 from __future__ import annotations

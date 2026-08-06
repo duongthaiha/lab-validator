@@ -14,6 +14,13 @@ asked for:
     lab-validator walk --url "<lab url>" --name "<lab name>"
 
 The human signs in. The machine does everything else.
+
+Orientation
+-----------
+Role:     the `lab-validator` front door; dispatches to `scripts/` or runs a builtin in process.
+Entry:    `main`, `COMMANDS`, `BUILTINS`, `cmd_walk`
+Talks to: browser, corpus, debugread, discovery, labclient, launch, preflight, runlog, scope,
+          targets, vault, walkloop
 """
 
 from __future__ import annotations

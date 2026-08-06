@@ -27,6 +27,7 @@ RUNTIME = sorted((ROOT / "src" / "lab_validator").glob("*.py")) + sorted(
 
 HEADING = "Orientation\n-----------\n"
 FIELD = re.compile(r"^(Role|Entry|Talks to):\s+(.*\S)\s*$")
+CONTINUED = re.compile(r"^\s+(\S.*?)\s*$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 
 #: A module may legitimately depend on no sibling and export no callable --
@@ -50,17 +51,27 @@ def docstring_of(path: Path) -> str:
 
 
 def orientation(path: Path) -> dict[str, str]:
-    """The block's fields, or `{}` when the module has no block at all."""
+    """The block's fields, or `{}` when the module has no block at all.
+
+    A value may wrap onto indented continuation lines. `cli.py` imports twelve
+    siblings and `lab_step.py` ten; forcing those onto one line would either
+    breach the 100-column limit or invite an abbreviated list, and a `Talks to:`
+    that silently omits collaborators is the drift this block exists to prevent.
+    """
     doc = docstring_of(path)
     if HEADING not in doc:
         return {}
-    fields = {}
+    fields: dict[str, str] = {}
+    current = ""
     for line in doc.split(HEADING, 1)[1].splitlines():
         if not line.strip():
             continue
-        matched = FIELD.match(line.strip())
+        matched = FIELD.match(line)
         if matched:
-            fields[matched.group(1)] = matched.group(2)
+            current = matched.group(1)
+            fields[current] = matched.group(2)
+        elif current and CONTINUED.match(line):
+            fields[current] += " " + CONTINUED.match(line).group(1)
     return fields
 
 
@@ -161,6 +172,29 @@ def test_orientation_never_displaces_the_rationale():
         before, after = doc.split(HEADING, 1)
         assert before.strip(), f"{path.name} opens with the block; the rationale must come first"
         for line in after.splitlines():
-            assert not line.strip() or FIELD.match(line.strip()), (
+            assert not line.strip() or FIELD.match(line) or CONTINUED.match(line), (
                 f"{path.name} has prose after the Orientation block: {line!r}"
+            )
+
+
+def test_operator_help_never_shows_the_developer_block():
+    """`--help` belongs to operators; the Orientation block does not.
+
+    Two scripts handed their whole `__doc__` to argparse -- `lab_text.py` as a
+    description, `lab_discover.py` as an epilog -- so adding the block put a
+    developer's dependency table into operator-facing help. argparse reflows
+    what it is given, which collapsed the aligned rows into a paragraph of
+    mush; it was caught by an offline replay diff rather than by any test.
+
+    Passing `__doc__` whole is the defect, so that is what this refuses. The
+    first line alone, or the prose split off ahead of the block, are both fine.
+    """
+    for path in modules():
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.keyword) or node.arg not in {"description", "epilog"}:
+                continue
+            bare = isinstance(node.value, ast.Name) and node.value.id == "__doc__"
+            assert not bare, (
+                f"{path.name} passes the whole __doc__ as {node.arg}; "
+                "split the Orientation block off first"
             )

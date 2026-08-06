@@ -18,6 +18,12 @@ Structural problems are surfaced as :class:`Anomaly` records rather than being
 repaired quietly. A table of contents that points at a missing anchor, or two
 entries sharing a label, is exactly the kind of drift the validator exists to
 report.
+
+Orientation
+-----------
+Role:     turns the live instruction DOM into the outline every later stage reads.
+Entry:    `extract`, `Outline`, `Heading`, `Anomaly`
+Talks to: runlog
 """
 
 from __future__ import annotations

@@ -8,6 +8,12 @@ Examples
     python scripts/lab_drive.py --creds
     python scripts/lab_drive.py --click 512,384 --screen
     python scripts/lab_drive.py --type "notepad" --key Enter --screen
+
+Orientation
+-----------
+Role:     operator-facing shim over `labclient`: inspect a running lab and control its VM.
+Entry:    `main`, `run`
+Talks to: browser, labclient
 """
 
 from __future__ import annotations

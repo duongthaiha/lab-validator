@@ -9,6 +9,12 @@ exactly when the person doing it has the least context to debug it.
 
 So this module exists to turn a descriptor into either a typed object or a
 precise complaint naming the file, the key and the fix.
+
+Orientation
+-----------
+Role:     loads and validates the per-lab descriptors in `targets/`.
+Entry:    `Target`, `TargetError`, `Problem`, `SCHEMA`
+Talks to: discovery
 """
 
 from __future__ import annotations

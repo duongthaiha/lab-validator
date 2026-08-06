@@ -14,6 +14,12 @@ The DPAPI layer used to be its own module (`secrets_store.py`). It had exactly
 one caller -- this file -- and the split invited the question "which of these
 two modules owns the session file?" when the answer was always "both, jointly".
 It now lives here, above the session code that uses it.
+
+Orientation
+-----------
+Role:     DPAPI secret storage and the health of the saved Learning Campus session.
+Entry:    `protect`, `unprotect`, `save_storage_state`, `inspect_session`
+Talks to: config
 """
 
 from __future__ import annotations

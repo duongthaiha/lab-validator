@@ -11,6 +11,12 @@ account with DPAPI, so subsequent validator runs never need your password.
 
 Re-run whenever the session expires (typically every few days to a few weeks,
 depending on tenant Conditional Access policy).
+
+Orientation
+-----------
+Role:     operator-facing shim over `auth`: one-time interactive sign-in.
+Entry:    `main`, `bootstrap`
+Talks to: auth, config
 """
 
 from __future__ import annotations

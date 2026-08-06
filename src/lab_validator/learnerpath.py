@@ -25,6 +25,12 @@ makes the report able to say *"section 4 was completed, but the instruction
 pane's own navigation was never exercised, so a defect in it would not have been
 found"* -- which is a true and useful sentence, and one no run could previously
 produce.
+
+Orientation
+-----------
+Role:     which channel may be used for which act, and which controls a run never touched.
+Entry:    `classify`, `Ledger`, `CAPABILITIES`
+Talks to: nothing
 """
 
 from __future__ import annotations

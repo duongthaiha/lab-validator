@@ -16,6 +16,12 @@ driving rather than something to remember to write.
 Long-running work uses ``until:<probe>``, which polls with heartbeats instead of
 guessing a fixed sleep. On budget exhaustion it records ``LAB007`` -- "this step
 never finishes" is a real finding about the lab, not a harness failure to hide.
+
+Orientation
+-----------
+Role:     operator-facing shim over `runlog`: the ordered actions; every verb becomes evidence.
+Entry:    `main`, `run_actions`, `ACTIONS`, `Step`
+Talks to: browser, console, corpus, imaging, labclient, learnerpath, paths, report, runlog, vault
 """
 
 from __future__ import annotations
