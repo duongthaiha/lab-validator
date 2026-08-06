@@ -1,0 +1,5 @@
+# The published skill archive is a zip that happens to live in a repository
+# full of text. Left to autodetection it would be safe today, but this working
+# copy is CRLF while git stores LF, and a single end-of-line conversion applied
+# to a zip produces a file that still looks committed and no longer extracts.
+*.skill binary

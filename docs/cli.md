@@ -298,6 +298,14 @@ referenced file resolves; it refuses symlinks rather than following them out of
 the tree. The deterministic ZIP-format archive prints its SHA-256 digest for
 transfer verification.
 
+That default output is committed, so another harness can take the archive
+straight from a clone without building it first. It is therefore the one copy of
+the skill nobody rebuilds before use, and a stale one gives no sign of being
+stale — it extracts and loads exactly like a current one.
+`test_the_committed_archive_is_what_the_sources_build_today` rebuilds it and
+compares bytes, so anything that changes what the skill ships must be followed
+by `package-skill` in the same change.
+
 The archive contains one top-level `lab-validator` directory:
 
 ```text

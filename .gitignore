@@ -10,7 +10,13 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
+# The published skill archive is committed so a harness can take it straight
+# from the repository; everything else a build drops here (wheels, sdists, the
+# extracted folder form) stays out. Excluding `dist/` itself rather than its
+# contents would make the re-inclusion below impossible -- git does not descend
+# into an excluded directory.
+dist/*
+!dist/lab-validator.skill
 downloads/
 eggs/
 .eggs/

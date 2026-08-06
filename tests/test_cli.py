@@ -158,6 +158,36 @@ def test_skill_package_is_reproducible(tmp_path):
     assert first.read_bytes() == second.read_bytes()
 
 
+def test_the_committed_archive_is_what_the_sources_build_today(tmp_path):
+    """A published archive that lags the sources is worse than no archive.
+
+    `dist/lab-validator.skill` is committed so another harness can take it
+    straight from the repository, which means it is the one copy of the skill
+    nobody rebuilds before using. A stale one does not announce itself: it
+    extracts, validates and loads perfectly well, and then behaves like whatever
+    the repository looked like on the day it was built. That already happened
+    once -- a `dist/lab-validator.zip` sat here for three days holding SKILL.md
+    and `references/` and no engine at all, so every dispatched command in it
+    would have failed.
+
+    Reproducible packaging is what makes this checkable at all: identical
+    sources produce identical bytes, so a plain comparison is a drift test.
+    """
+    committed = cli.ROOT / "dist" / "lab-validator.skill"
+    assert committed.exists(), (
+        "dist/lab-validator.skill is committed and missing -- rebuild it with "
+        "`lab-validator package-skill`"
+    )
+
+    fresh = tmp_path / "fresh.skill"
+    assert cli.cmd_package_skill(type("N", (), {"out": str(fresh)})()) == 0
+
+    assert committed.read_bytes() == fresh.read_bytes(), (
+        "the committed archive no longer matches the sources -- rebuild it with "
+        "`lab-validator package-skill` and commit the result in the same change"
+    )
+
+
 def test_skill_validation_rejects_a_missing_reference():
     with pytest.raises(ValueError, match="references/missing.md"):
         cli._validate_skill(

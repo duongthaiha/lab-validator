@@ -670,6 +670,16 @@ lab-validator package-skill
 # dist\lab-validator.skill
 ```
 
+**That archive is committed**, so a harness can take `dist/lab-validator.skill`
+straight from a clone or a raw download without building anything first. It is
+the one copy of the skill nobody rebuilds before using, which is also the one
+that can quietly go stale — a lagging archive extracts, validates and loads
+perfectly well, and then behaves like whatever the repository looked like on the
+day it was built. `test_the_committed_archive_is_what_the_sources_build_today`
+rebuilds it and compares bytes, so changing anything the skill ships means
+running `package-skill` and committing the result in the same change.
+Reproducible packaging is what makes that comparison possible at all.
+
 Both commands publish the same curated subset of the repository, so the
 installed copy and the archive are byte-identical and neither can go stale. The
 `.skill` file is a ZIP archive with `lab-validator/SKILL.md`, its references and
