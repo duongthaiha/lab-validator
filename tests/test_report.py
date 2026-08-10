@@ -8,6 +8,7 @@ disappears, and that image links resolve from where the file is written.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -157,6 +158,104 @@ def test_verified_correct_is_honest_when_nothing_was_judged(tmp_path):
     run.step("s00", verdict="PASS", surface="probe", note="settled after 3s")
     text = render_segment(run, section(run, "s00"))
     assert "_No explicit confirmations recorded in this section._" in text
+
+
+def test_section_report_discloses_deviations_without_calling_them_passes(tmp_path):
+    """An alternate route proves that route, not the instruction it replaced."""
+    run = make_run(tmp_path)
+    run.step(
+        "s00",
+        verdict="PASS",
+        instruction_ref="setup",
+        deviation="Used resource search instead of the documented left-navigation blade.",
+        note="The deployment opened and the task completed.",
+        surface="analysis",
+        images=["images/0001-s00-search.jpg"],
+    )
+
+    text = render_segment(run, section(run, "s00"))
+
+    deviations = text.split("## Deviations from the written instructions")[1]
+    assert "instruction `setup`" in deviations
+    assert "Used resource search" in deviations
+    assert "The deployment opened" in deviations
+    assert "(../images/0001-s00-search.jpg)" in deviations
+    verified = text.split("## Verified correct")[1]
+    assert "Used resource search" not in verified
+    assert "_No explicit confirmations recorded" in verified
+
+
+def test_deviations_are_scoped_to_their_section(tmp_path):
+    run = make_run(tmp_path)
+    run.step(
+        "s01",
+        deviation="Opened the deployment from the resource group.",
+        surface="analysis",
+    )
+
+    assert "## Deviations from the written instructions" not in render_segment(
+        run, section(run, "s00")
+    )
+    assert "## Deviations from the written instructions" not in render(run)
+
+
+def test_retracted_deviation_disappears_from_the_section_report(tmp_path):
+    run = make_run(tmp_path)
+    record = run.step(
+        "s00",
+        deviation="Used search because the documented menu was missing.",
+        surface="analysis",
+    )
+    run.retract(record["seq"], "The menu appeared after the page finished loading.")
+
+    text = render_segment(run, section(run, "s00"))
+
+    assert "## Deviations from the written instructions" not in text
+    assert "The menu appeared after the page finished loading." in text
+
+
+def test_section_template_covers_every_rendered_section_heading(tmp_path):
+    """A new report block must not ship without a place in the published template."""
+    run = make_run(tmp_path)
+    run.step(
+        "s00",
+        verdict="LAB001",
+        severity="critical",
+        note="The named model is unavailable.",
+        surface="analysis",
+    )
+    run.step(
+        "s00",
+        verdict="LAB010",
+        severity="info",
+        observed="The working route is labelled classic.",
+        surface="analysis",
+    )
+    run.step(
+        "s00",
+        deviation="Used resource search instead of the documented menu.",
+        surface="analysis",
+    )
+    run.step("s00", verdict="DEFERRED", note="Reserved time for reporting.")
+    run.step("s00", verdict="LAB000", note="The portal recovered on retry.")
+    withdrawn = run.step(
+        "s00",
+        verdict="PASS",
+        note="The instruction matched.",
+        surface="analysis",
+    )
+    run.retract(withdrawn["seq"], "A later check disproved it.")
+    run.step("s00", action="shot", images=["images/0001-s00-evidence.jpg"])
+
+    rendered = render_segment(run, section(run, "s00"))
+    template = (
+        Path(__file__).resolve().parents[1] / "assets" / "section-report-template.md"
+    ).read_text(encoding="utf-8")
+
+    rendered_headings = set(re.findall(r"^## .+$", rendered, re.MULTILINE))
+    template_headings = set(re.findall(r"^## .+$", template, re.MULTILINE))
+    assert rendered_headings <= template_headings
+    assert "## What the lab asks the learner to do" in template_headings
 
 
 def test_heartbeats_are_counted_not_listed(tmp_path):

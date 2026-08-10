@@ -321,22 +321,20 @@ which is how a section reports clean with a task nobody did. `lab-validator
 text --segment s04 --tasks` prints the anchors. If you keep being asked for
 tasks you believe you did, this is why, and `next` will say so.
 
-Every finding needs three things (see `references/judgement.md`):
-
 | Field | Question it answers |
 | --- | --- |
 | `--verdict` | *What kind* of defect — see `references/taxonomy.md` |
 | `--domain` | *Who fixes it* — `instruction`, `setup`, or `undetermined` |
 | `--note` | *Why you believe it* — the evidence, quoted |
+| `--deviation` | *What the learner did differently* from the written path |
 
-Record `PASS` for things you verified correct, with the same rigour. **A report
-with no positive evidence cannot distinguish "verified correct" from "never
-reached"**, and a reader will assume the flattering one.
-
-Then ask whether the path that just worked is still the *current* one. A
-*classic* console, a superseded API version, a published retirement date — that
-is `LAB010`, recorded **as well as** the `PASS`: the only code a working step can
-carry, and so the only one you must look for rather than trip over.
+Record `PASS` for things you verified correct. **Without positive evidence a report cannot
+distinguish "verified correct" from "never reached"**, and a reader assumes the flattering one.
+Then ask whether the working path is still current. A *classic* console, superseded API or
+published retirement is `LAB010`, recorded **as well as** the `PASS`: the only code a working
+step can carry, and so the only one you must look for rather than trip over.
+Record every departure from the written path with `--deviation`, including
+alternate navigation, extra mandatory steps, manual fixes and workarounds.
 
 ## Step 8 — Finish the section and move on
 
@@ -361,8 +359,9 @@ lab-validator run --report
 ```
 
 Produces `runs/<ts>/gap-analysis.md` plus one report per section, following the
-[output template](assets/gap-analysis-template.md): completability, blockers,
-coverage, findings grouped by owner, verified steps, and audit history.
+[roll-up template](assets/gap-analysis-template.md) and [per-section
+template](assets/section-report-template.md): completability, blockers, deviations,
+findings, verified steps, and audit history.
 
 Retract anything that does not survive re-checking:
 

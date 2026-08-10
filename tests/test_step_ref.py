@@ -14,6 +14,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -129,3 +130,32 @@ def test_both_recording_paths_check_the_reference():
     # offline route is the one that judges instruction text.
     source = (ROOT / "scripts" / "lab_step.py").read_text(encoding="utf-8")
     assert source.count("check_ref(run, args.ref)") == 2
+
+
+def test_deviation_recording_preserves_the_existing_judgement_fields(tmp_path):
+    module = _lab_step()
+    run = make_run(tmp_path)
+    args = SimpleNamespace(
+        note="The alternate route completed the deployment.",
+        deviation="Used Models + endpoints because Overview had no deployment link.",
+        verdict="LAB004",
+        severity="minor",
+        ref="1-open-the-microsoft-foundry---overview-page",
+        domain="instruction",
+    )
+
+    findings = module.record_judgement(run, "s00", args)
+
+    record = list(run.steps())[-1]
+    assert findings == 1
+    assert record["deviation"] == args.deviation
+    assert record["note"] == args.note
+    assert record["instructionRef"] == args.ref
+    assert record["verdict"] == "LAB004"
+    assert record["severity"] == "minor"
+    assert record["domain"] == "instruction"
+
+
+def test_both_step_paths_share_the_deviation_recorder():
+    source = (ROOT / "scripts" / "lab_step.py").read_text(encoding="utf-8")
+    assert source.count("record_judgement(run,") == 2

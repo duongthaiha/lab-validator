@@ -8,6 +8,10 @@ This report is what a simulated learner encountered while doing the lab. It
 records what was verified correct as well as what was wrong, because a list of
 failures alone cannot distinguish a checked step from a skipped one.
 
+This is the run-level roll-up. Each linked section report follows
+[`section-report-template.md`](section-report-template.md), including any
+deviation the simulated learner took from the written instructions.
+
 ## Can a learner complete this lab?
 
 {{YES | NO | PARTIALLY | UNKNOWN}} — {{completion_summary}}

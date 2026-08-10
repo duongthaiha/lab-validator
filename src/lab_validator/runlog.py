@@ -68,15 +68,16 @@ def _is_judgement(step: dict) -> bool:
 
     Findings assert an instruction is wrong. Confirmations -- a ``PASS``
     recorded deliberately on the analysis surface with a note -- assert the
-    opposite. Both are claims the report repeats, so both must be withdrawable.
-    A click or a screenshot asserts nothing and has nothing to withdraw.
+    opposite. A deviation asserts that the learner left the written path.
+    All three are claims the report repeats, so all must be withdrawable. A
+    click or a screenshot asserts nothing and has nothing to withdraw.
     """
     if step.get("verdict") in FINDING_VERDICTS:
         return True
     return (
         step.get("verdict") == "PASS"
         and step.get("surface") == "analysis"
-        and bool(step.get("note"))
+        and bool(step.get("note") or step.get("deviation"))
         and step.get("kind") != "retraction"
     )
 
@@ -360,6 +361,7 @@ class Run:
         severity: str | None = None,
         note: str | None = None,
         domain: str | None = None,
+        deviation: str | None = None,
         **extra: Any,
     ) -> dict:
         """Append one trace record and return it.
@@ -373,6 +375,11 @@ class Run:
         admit ``undetermined``; guessing sends the defect to an owner who
         correctly rejects it, and the finding then dies. Findings default to
         ``undetermined`` rather than to a guess.
+
+        ``deviation`` records what the simulated learner did differently from
+        the written path. It is separate from the verdict because an alternate
+        route may be harmless, may be the workaround for a finding, or may be
+        the only way to finish; none of those facts alone decides severity.
         """
         if verdict not in VERDICTS:
             raise ValueError(f"unknown verdict {verdict!r}; expected one of {VERDICTS}")
@@ -380,6 +387,10 @@ class Run:
             raise ValueError(f"unknown severity {severity!r}; expected one of {SEVERITIES}")
         if domain is not None and domain not in DOMAINS:
             raise ValueError(f"unknown domain {domain!r}; expected one of {DOMAINS}")
+        if deviation is not None:
+            deviation = deviation.strip()
+            if not deviation:
+                raise ValueError("deviation must describe how the learner left the written path")
         if verdict == "DEFERRED" and not note:
             raise ValueError("DEFERRED requires a note justifying why it was not attempted")
         if verdict in FINDING_VERDICTS and domain is None:
@@ -411,6 +422,8 @@ class Run:
             record["severity"] = severity
         if note:
             record["note"] = note
+        if deviation:
+            record["deviation"] = deviation
         record.update(extra)
 
         record = self.redactor.scrub(record)

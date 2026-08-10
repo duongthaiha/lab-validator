@@ -253,7 +253,8 @@ lab-validator walk --url "<lab url>" --name "<lab title>"    # 2. you sign in; i
 # 3. repeat until it says stop:
 lab-validator next                                           # what to do now, and why
 lab-validator step --segment s01 --ref <task-anchor> `       #    do it, record what you saw
-  --do click:820,410 --do shot --verdict PASS
+  --do click:820,410 --do shot --verdict PASS `
+  --deviation "Used search instead of the documented navigation"
 lab-validator run --finish done                              #    when a section is complete
 
 lab-validator run --report                                   # 4. runs/<ts>/gap-analysis.md
@@ -506,6 +507,9 @@ still leaves nine finished, publishable reports rather than one roll-up that
 was never written. `gap-analysis.md` is the roll-up and links to each of them.
 Reports are rendered from the trace each time, never appended to — which is why
 a retraction removes a finding cleanly instead of needing an erratum.
+Every departure from the written path is trace data and appears in that
+section's report, including alternate navigation, extra steps, fixes and
+workarounds. It does not automatically become a defect or a verified pass.
 
 Every report opens with the question a reader actually has — **can a learner
 complete this: YES / NO / PARTIALLY / UNKNOWN** — followed by the blockers and
@@ -741,7 +745,8 @@ docs/cli.md                         CLI workflows, commands, options and recover
 docs/gapanalysis.md                 learner-facing gaps found in the target lab
 SKILL.md                            the agent skill — the walk, step by step
 references/*.md                     judgement, taxonomy, traps, Skillable mechanics
-assets/gap-analysis-template.md     the shape of the report a walk produces
+assets/gap-analysis-template.md     the shape of the run-level roll-up
+assets/section-report-template.md   the shape of each per-section report
 evals/                              skill quality evals — see evals/README.md
 targets/<slug>.toml                 per-lab descriptor — data only, no code
 

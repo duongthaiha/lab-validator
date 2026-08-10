@@ -35,7 +35,8 @@ driving this must guarantee, see
 8. **Write reports continuously.** Every step appends evidence to `trace.jsonl`
    and refreshes the current section report. The roll-up is rendered from the
    trace, so interrupted runs remain useful and retracted findings disappear
-   cleanly on re-render.
+   cleanly on re-render. Departures from the written path are recorded as
+   structured deviations and disclosed in the relevant section report.
 
 ## Architecture
 
@@ -144,7 +145,7 @@ for any harness in `references/harness-traps.md` under *The harness contract*.
 runs/<timestamp>/
   run.json                    manifest, segment state, scope, corpus identity
   outline.json                immutable task outline used by this run
-  trace.jsonl                 append-only evidence records
+  trace.jsonl                 append-only actions, verdicts, deviations, and evidence
   debug.jsonl                 per-action screen-change measurements
   credentials.json            run-scoped vault; gitignored and redacted
   images/                     numbered screenshots

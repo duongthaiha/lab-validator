@@ -67,7 +67,8 @@ Then walk it:
 lab-validator next --run runs\<timestamp>
 lab-validator text --run runs\<timestamp> --segment s01 --tasks
 lab-validator step --run runs\<timestamp> --segment s01 --ref <task-anchor> `
-  --do shot --note "What the learner observed" --verdict PASS
+  --do shot --note "What the learner observed" --verdict PASS `
+  --deviation "Used search instead of the documented navigation"
 lab-validator run --run runs\<timestamp> --report
 ```
 
@@ -143,7 +144,8 @@ used.
 ```powershell
 lab-validator step --segment <id> [--run <folder>] [--label <name>] `
   [--do <action> ...] [--note <text> --verdict <value> --ref <task-anchor>] `
-  [--severity <level>] [--domain instruction|setup|undetermined]
+  [--severity <level>] [--domain instruction|setup|undetermined] `
+  [--deviation <text>]
 ```
 
 Repeat `--do` to preserve action order. Common actions are:
@@ -164,6 +166,10 @@ Use `--start-segment` and `--end-segment done|blocked|skipped` only when driving
 by hand; when following `next`, those transitions are issued as mechanical moves.
 A verdict must use the numbered task's anchor from `text --tasks`, not the
 containing section anchor.
+Use `--deviation` for every alternate route, extra mandatory step, manual fix,
+configuration change, or workaround that differs from the written path. The
+field is independent of verdict and severity because a deviation is not
+automatically a defect.
 
 ### `run`
 
@@ -177,6 +183,8 @@ lab-validator run --check-target <slug>
 ```
 
 `--report` regenerates section reports and `gap-analysis.md` from the trace.
+Section reports disclose deviations; the overall roll-up remains focused on
+coverage, completability, and findings.
 `--retract` withdraws a finding without rewriting append-only history.
 `--start` remains available for creating a run from an already-open lab;
 normally `walk` is the safer end-to-end entry point.

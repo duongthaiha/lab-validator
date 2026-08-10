@@ -772,12 +772,7 @@ async def main_async(args) -> int:
             if args.end_segment:
                 run.end_segment(args.segment, args.end_segment, await lab.minutes_remaining())
 
-            if args.note:
-                run.step(args.segment, verdict=args.verdict, severity=args.severity,
-                         note=args.note, instruction_ref=args.ref, domain=args.domain,
-                         surface="analysis")
-                if args.verdict in FINDING_VERDICTS:
-                    findings += 1
+            findings += record_judgement(run, args.segment, args)
             report = refresh_section_report(run, args.segment)
             where = f"  -> {report.relative_to(run.dir)}" if report else ""
             print(f"run: {run.dir.name}  segment: {args.segment}  "
@@ -835,6 +830,29 @@ def check_ref(run: Run, ref: str | None) -> str | None:
     return "\n".join(lines)
 
 
+def record_judgement(run: Run, segment: str, args) -> int:
+    """Record the analysis attached to a step and return its finding count.
+
+    Browser-driven and record-only steps must write the same trace shape. The
+    two paths used to spell this call independently, which made adding a field
+    to one and forgetting the other an easy way to lose evidence depending on
+    whether the lab happened to be reachable.
+    """
+    if not args.note and not args.deviation:
+        return 0
+    run.step(
+        segment,
+        verdict=args.verdict,
+        severity=args.severity,
+        note=args.note,
+        instruction_ref=args.ref,
+        domain=args.domain,
+        deviation=args.deviation,
+        surface="analysis",
+    )
+    return 1 if args.verdict in FINDING_VERDICTS else 0
+
+
 def record_only(args, lab_minutes: int | None = None) -> int:
     """Append bookkeeping without requiring a reachable lab.
 
@@ -867,12 +885,7 @@ def record_only(args, lab_minutes: int | None = None) -> int:
     if args.start_segment:
         run.start_segment(segment, lab_minutes)
 
-    finding = 0
-    if args.note:
-        run.step(segment, verdict=args.verdict, severity=args.severity,
-                 note=args.note, instruction_ref=args.ref, domain=args.domain,
-                 surface="analysis")
-        finding = 1 if args.verdict in FINDING_VERDICTS else 0
+    finding = record_judgement(run, segment, args)
 
     if args.end_segment:
         run.end_segment(segment, args.end_segment, lab_minutes)
@@ -910,6 +923,8 @@ def main() -> int:
     p.add_argument("--start-segment", action="store_true", help="mark the segment started")
     p.add_argument("--end-segment", metavar="STATUS", help="mark the segment done/blocked/skipped")
     p.add_argument("--note", help="record an observation as its own trace record")
+    p.add_argument("--deviation",
+                   help="record how the learner departed from the written instructions")
     p.add_argument("--verdict", default="PASS", help="verdict for --note")
     p.add_argument("--severity", help="severity for --note")
     p.add_argument("--domain", choices=DOMAINS,

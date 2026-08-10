@@ -11,6 +11,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lab_validator.runlog import Run, Segment  # noqa: E402
@@ -99,3 +101,39 @@ def test_trace_is_append_only(tmp_path):
         if line.strip()
     ]
     assert [r["seq"] for r in lines] == [1, 2]
+
+
+def test_deviation_is_structured_trace_data(tmp_path):
+    run = make_run(tmp_path)
+
+    record = run.step(
+        "s00",
+        instruction_ref="setup",
+        deviation="  Opened Models + endpoints from the left navigation.  ",
+        note="The documented Overview link was unavailable.",
+        surface="analysis",
+    )
+
+    assert record["deviation"] == "Opened Models + endpoints from the left navigation."
+    assert record["instructionRef"] == "setup"
+    assert record["note"] == "The documented Overview link was unavailable."
+
+
+def test_empty_deviation_is_refused(tmp_path):
+    run = make_run(tmp_path)
+
+    with pytest.raises(ValueError, match="deviation must describe"):
+        run.step("s00", deviation="   ", surface="analysis")
+
+
+def test_a_deviation_without_a_note_can_be_retracted(tmp_path):
+    run = make_run(tmp_path)
+    record = run.step(
+        "s00",
+        deviation="Used the search box instead of the documented menu.",
+        surface="analysis",
+    )
+
+    run.retract(record["seq"], "The menu was present after the page finished loading.")
+
+    assert record["seq"] in run.retracted()

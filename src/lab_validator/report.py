@@ -203,12 +203,15 @@ def is_confirmation(step: dict) -> bool:
     ``42 chars`` -- and those are trace bookkeeping, not evidence that anything
     was checked. Listing them under "Verified correct" would pad the section
     with claims nobody made, which is the same failure as counting a screenshot
-    as a verification. Judgements are the ones recorded on the analysis surface.
+    as a verification.     Judgements are the ones recorded on the analysis surface. A deviation is
+    not a confirmation: completing the task by another route proves the
+    workaround, not that the written instruction matched reality.
     """
     return (
         step.get("verdict") == "PASS"
         and step.get("surface") == "analysis"
         and bool(step.get("note"))
+        and not step.get("deviation")
     )
 
 
@@ -331,6 +334,29 @@ def render_segment(run: Run, segment: Segment, outline: Outline | None = None) -
                 add("")
 
     render_ageing(add, findings)
+    deviations = [
+        s for s in steps if s.get("deviation") and s.get("seq") not in retracted
+    ]
+    if deviations:
+        add("## Deviations from the written instructions")
+        add("")
+        add("These are actions the simulated learner took by a route the lab did "
+            "not describe. They are reported whether or not the alternate route "
+            "revealed a defect.")
+        add("")
+        for s in deviations:
+            ref = (
+                f"instruction `{s['instructionRef']}`"
+                if s.get("instructionRef")
+                else "no instruction anchor recorded"
+            )
+            add(f"- **Step `{s['seq']}`** · {ref} — {s['deviation']}")
+            if s.get("note"):
+                add(f"  <br>outcome: {s['note']}")
+            for img in s.get("images", []):
+                add(f"  ![deviation evidence](../{img})")
+        add("")
+
     passes = [s for s in steps if is_confirmation(s) and s.get("seq") not in retracted]
     add("## Verified correct")
     add("")

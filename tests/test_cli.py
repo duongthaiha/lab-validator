@@ -106,6 +106,7 @@ def test_packaging_the_skill_writes_one_portable_archive(tmp_path):
             "lab-validator/SKILL.md",
             "lab-validator/references/judgement.md",
             "lab-validator/assets/gap-analysis-template.md",
+            "lab-validator/assets/section-report-template.md",
             "lab-validator/scripts/install_runtime.py",
             "lab-validator/scripts/lab_step.py",
             "lab-validator/src/lab_validator/cli.py",
